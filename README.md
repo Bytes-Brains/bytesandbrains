@@ -9,6 +9,14 @@
 </p>
 
 <p align="center">
+  <a href="https://bytesandbrains.ai">bytesandbrains.ai</a>
+  &nbsp;·&nbsp;
+  <a href="https://crates.io/crates/bytesandbrains">crates.io</a>
+  &nbsp;·&nbsp;
+  <a href="https://docs.rs/bytesandbrains">docs.rs</a>
+</p>
+
+<p align="center">
   <a href="https://crates.io/crates/bytesandbrains"><img src="https://img.shields.io/crates/v/bytesandbrains.svg" alt="crates.io" /></a>
   <a href="https://docs.rs/bytesandbrains"><img src="https://docs.rs/bytesandbrains/badge.svg" alt="docs.rs" /></a>
   <a href="https://github.com/Bytes-Brains/bytesandbrains/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/bytesandbrains.svg" alt="license" /></a>
