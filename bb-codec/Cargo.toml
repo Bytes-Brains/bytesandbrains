@@ -1,6 +1,6 @@
 [package]
 name = "bytesandbrains-codec"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Vector encoding codecs for BytesAndBrains"
 license = "GPL-2.0"
@@ -13,7 +13,7 @@ proto = ["bb_core/proto"]
 codec = ["serde", "bincode"]
 
 [dependencies]
-bb_core = { package = "bytesandbrains-core", version = "0.2.1", path = "../bb-core" }
-bb_ml = { package = "bytesandbrains-ml", version = "0.2.1", path = "../bb-ml" }
+bb_core = { package = "bytesandbrains-core", version = "0.2.2", path = "../bb-core" }
+bb_ml = { package = "bytesandbrains-ml", version = "0.2.2", path = "../bb-ml" }
 serde = { version = "1", features = ["derive"], optional = true }
 bincode = { version = "1", optional = true }

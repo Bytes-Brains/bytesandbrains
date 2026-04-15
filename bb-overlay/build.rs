@@ -4,11 +4,12 @@ fn main() {
         let mut config = prost_build::Config::new();
         config.extern_path(".bb_core", "::bb_core::proto");
 
-        let mut protos = Vec::new();
-        let mut includes = vec!["../bb-core/src/proto/"];
+        let bb_core_proto_include = std::env::var("DEP_BYTESANDBRAINS_CORE_PROTO_INCLUDE").expect(
+            "DEP_BYTESANDBRAINS_CORE_PROTO_INCLUDE must be set by bytesandbrains-core build script",
+        );
 
-        protos.push("src/gossip/proto/gossip.proto");
-        includes.push("src/gossip/proto/");
+        let protos = vec!["src/gossip/proto/gossip.proto"];
+        let includes = vec![bb_core_proto_include, "src/gossip/proto/".to_string()];
 
         config.compile_protos(&protos, &includes).unwrap();
     }

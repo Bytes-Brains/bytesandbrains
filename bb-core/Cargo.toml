@@ -1,9 +1,11 @@
 [package]
 name = "bytesandbrains-core"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Core traits and types for BytesAndBrains decentralized networking and ML protocols"
 license = "GPL-2.0"
+links = "bytesandbrains_core_proto"
+include = ["src/**/*", "build.rs", "Cargo.toml"]
 
 [package.metadata.docs.rs]
 all-features = true
