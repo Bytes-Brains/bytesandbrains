@@ -1,0 +1,11 @@
+[package]
+name = "bytesandbrains-ml"
+version = "0.2.0"
+edition = "2021"
+description = "Machine learning utilities for BytesAndBrains"
+license = "GPL-2.0"
+
+[dependencies]
+rand = "0.8"
+
+[dev-dependencies]

@@ -1,0 +1,33 @@
+[package]
+name = "bytesandbrains"
+version = "0.2.0"
+edition = "2021"
+description = "A Rust library for decentralized networking and edge AI"
+license = "GPL-2.0"
+repository = "https://github.com/Bytes-Brains/bytesandbrains"
+keywords = ["p2p", "decentralized", "ann", "overlay", "gossip"]
+categories = ["network-programming", "algorithms"]
+readme = "../README.md"
+
+[package.metadata.docs.rs]
+# Enable all features except `proto` — proto requires protoc which docs.rs doesn't have
+features = ["overlay", "gossip", "codec", "index", "ml", "simd"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+overlay = ["dep:bb_overlay"]
+gossip = ["overlay", "bb_overlay/gossip"]
+codec = ["dep:bb_codec"]
+index = ["dep:bb_index"]
+ml = ["dep:bb_ml"]
+proto = ["bb_core/proto", "bb_overlay?/proto", "bb_codec?/proto"]
+simd = ["bb_core/simd"]
+full = ["overlay", "gossip", "codec", "index", "ml", "proto"]
+
+[dependencies]
+bb_core = { package = "bytesandbrains-core", version = "0.2.0", path = "../bb-core" }
+bb_overlay = { package = "bytesandbrains-overlay", version = "0.2.0", path = "../bb-overlay", optional = true }
+bb_codec = { package = "bytesandbrains-codec", version = "0.2.0", path = "../bb-codec", optional = true }
+bb_index = { package = "bytesandbrains-index", version = "0.2.0", path = "../bb-index", optional = true }
+bb_ml = { package = "bytesandbrains-ml", version = "0.2.0", path = "../bb-ml", optional = true }

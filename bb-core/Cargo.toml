@@ -1,0 +1,25 @@
+[package]
+name = "bytesandbrains-core"
+version = "0.2.0"
+edition = "2021"
+description = "Core traits and types for BytesAndBrains decentralized networking and ML protocols"
+license = "GPL-2.0"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+simd = ["simsimd"]
+proto = ["dep:prost", "dep:prost-build"]
+
+[dependencies]
+lru = "0.12"
+simsimd = { version = "6.0", optional = true }
+prost = { version = "0.13", optional = true }
+
+[build-dependencies]
+prost-build = { version = "0.13", optional = true }
+
+[dev-dependencies]
+rand = "0.8"

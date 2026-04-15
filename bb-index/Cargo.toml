@@ -1,0 +1,13 @@
+[package]
+name = "bytesandbrains-index"
+version = "0.2.0"
+edition = "2021"
+description = "Vector indices for BytesAndBrains"
+license = "GPL-2.0"
+
+[dependencies]
+bb_core = { package = "bytesandbrains-core", version = "0.2.0", path = "../bb-core" }
+
+[dev-dependencies]
+bb_codec = { package = "bytesandbrains-codec", version = "0.2.0", path = "../bb-codec" }
+bb_ml = { package = "bytesandbrains-ml", version = "0.2.0", path = "../bb-ml" }

@@ -1,0 +1,63 @@
+syntax = "proto3";
+package gossip_proto;
+
+option optimize_for = LITE_RUNTIME;
+
+import "bb_core.proto";
+
+enum GossipModeProto {
+    PUSH_PULL = 0;
+    PUSH = 1;
+    PULL = 2;
+}
+
+// Selector mode for randomized gossip (RandomizedSelectorMode)
+enum RandomizedSelectorModeProto {
+    TAIL = 0;
+    UNIFORM_RANDOM = 1;
+}
+
+message DurationProto {
+    uint64 millis = 1;
+}
+
+// Protocol-level config (maps to GossipConfig)
+message GossipConfigProto {
+    uint32 view_size = 1;
+    GossipModeProto mode = 4;
+    uint32 max_concurrent_requests = 6;
+    DurationProto retry_time = 7;
+    DurationProto request_timeout = 8;
+    DurationProto poll_interval = 9;
+}
+
+// Exchange strategy config for RandomizedExchange
+message RandomizedExchangeConfigProto {
+    uint32 healing = 1;
+    uint32 swap = 2;
+}
+
+// Shared peer envelope: each peer type reads the fields it needs.
+// AgePeer uses `peer` + `age`. Future types may add fields.
+message GossipPeerProto {
+    bb_core.PeerProto peer = 1;
+    uint32 age = 2;
+}
+
+message GossipRequestProto {
+    uint64 request_id = 1;
+    GossipModeProto mode = 2;
+    repeated GossipPeerProto view = 3;
+}
+
+message GossipResponseProto {
+    uint64 request_id = 1;
+    repeated GossipPeerProto view = 2;
+}
+
+message GossipMessageProto {
+    oneof message {
+        GossipRequestProto request = 1;
+        GossipResponseProto response = 2;
+    }
+}

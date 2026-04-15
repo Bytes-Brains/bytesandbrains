@@ -1,0 +1,3 @@
+[workspace]
+members = ["bb-core", "bb-overlay", "bb-ml", "bb-codec", "bb-index", "bytesandbrains"]
+resolver = "2"
