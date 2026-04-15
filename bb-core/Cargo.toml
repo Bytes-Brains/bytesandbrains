@@ -1,6 +1,6 @@
 [package]
 name = "bytesandbrains-core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Core traits and types for BytesAndBrains decentralized networking and ML protocols"
 license = "GPL-2.0"

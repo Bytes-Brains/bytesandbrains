@@ -1,13 +1,13 @@
 [package]
 name = "bytesandbrains-index"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Vector indices for BytesAndBrains"
 license = "GPL-2.0"
 
 [dependencies]
-bb_core = { package = "bytesandbrains-core", version = "0.2.0", path = "../bb-core" }
+bb_core = { package = "bytesandbrains-core", version = "0.2.1", path = "../bb-core" }
 
 [dev-dependencies]
-bb_codec = { package = "bytesandbrains-codec", version = "0.2.0", path = "../bb-codec" }
-bb_ml = { package = "bytesandbrains-ml", version = "0.2.0", path = "../bb-ml" }
+bb_codec = { package = "bytesandbrains-codec", version = "0.2.1", path = "../bb-codec" }
+bb_ml = { package = "bytesandbrains-ml", version = "0.2.1", path = "../bb-ml" }

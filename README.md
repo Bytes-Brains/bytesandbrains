@@ -8,6 +8,12 @@
   A Rust library for decentralized networking and edge AI.
 </p>
 
+<p align="center">
+  <a href="https://crates.io/crates/bytesandbrains"><img src="https://img.shields.io/crates/v/bytesandbrains.svg" alt="crates.io" /></a>
+  <a href="https://docs.rs/bytesandbrains"><img src="https://docs.rs/bytesandbrains/badge.svg" alt="docs.rs" /></a>
+  <a href="https://github.com/Bytes-Brains/bytesandbrains/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/bytesandbrains.svg" alt="license" /></a>
+</p>
+
 ---
 
 **bytesandbrains** provides composable, transport-agnostic building blocks for peer-to-peer overlay networks and distributed machine learning.
@@ -16,14 +22,14 @@
 
 ```toml
 [dependencies]
-bytesandbrains = { version = "0.1", features = ["full"] }
+bytesandbrains = { version = "0.2", features = ["full"] }
 ```
 
 Or pick only what you need:
 
 ```toml
 [dependencies]
-bytesandbrains = { version = "0.1", features = ["gossip", "proto"] }
+bytesandbrains = { version = "0.2", features = ["gossip", "proto"] }
 ```
 
 ## Workspace
