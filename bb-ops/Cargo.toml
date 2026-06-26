@@ -40,12 +40,13 @@ default = ["cpu-backend"]
 # Pure-Rust reference CPU backend at `bb_ops::backends::cpu`.
 cpu-backend     = ["dep:ndarray"]
 # Test-only components (KademliaHand).
+test-components = []
 
 [dependencies]
-bb-ir       = { path = "../bb-ir", version = "0.3.2" }
-bb-dsl      = { path = "../bb-dsl", version = "0.3.2" }
-bb-runtime  = { path = "../bb-runtime", version = "0.3.2", default-features = false }
-bb-derive   = { path = "../bb-derive", version = "0.3.2" }
+bb-ir       = { path = "../bb-ir", version = "0.3.3" }
+bb-dsl      = { path = "../bb-dsl", version = "0.3.3" }
+bb-runtime  = { path = "../bb-runtime", version = "0.3.3", default-features = false }
+bb-derive   = { path = "../bb-derive", version = "0.3.3" }
 prost       = { workspace = true }
 tracing     = { workspace = true }
 serde       = { workspace = true }

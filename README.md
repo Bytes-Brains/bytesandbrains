@@ -144,7 +144,7 @@ Dual-licensed:
 - **[AGPL-3.0-or-later](LICENSE)** — for open-source use that
   satisfies the AGPL's network-use copyleft.
 - **Commercial license** — for organizations that need an
-  alternative to AGPL. Contact <license@bytesandbrains.com>.
+  alternative to AGPL. Contact <license@bytesandbrains.ai>.
 
 The dual-licensing model matches the framework's intended use:
 build open infrastructure for decentralized ML, or ship a commercial

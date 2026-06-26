@@ -13,7 +13,7 @@ upgrade to the latest minor before reporting.
 
 ## Reporting a Vulnerability
 
-Report security issues privately to **security@bytesandbrains.com**.
+Report security issues privately to **security@bytesandbrains.ai**.
 
 Please include:
 

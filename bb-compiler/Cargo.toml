@@ -25,18 +25,18 @@ categories.workspace   = true
 [lib]
 
 [dependencies]
-bb-ir       = { path = "../bb-ir", version = "0.3.2" }
-bb-dsl      = { path = "../bb-dsl", version = "0.3.2" }
+bb-ir       = { path = "../bb-ir", version = "0.3.3" }
+bb-dsl      = { path = "../bb-dsl", version = "0.3.3" }
 # `CompiledArtifact.dispatch_table` carries
 # `ProtocolDispatchFn` pointers - the engine-internal type the
 # closures get stamped against. bb-runtime depends on bb-ir, not
 # bb-compiler, so this dep is acyclic.
-bb-runtime  = { path = "../bb-runtime", version = "0.3.2" }
+bb-runtime  = { path = "../bb-runtime", version = "0.3.3" }
 serde       = { workspace = true }
 
 [dev-dependencies]
 prost    = { workspace = true }
-bb-ops   = { path = "../bb-ops", version = "0.3.2", features = ["test-components"] }
+bb-ops   = { path = "../bb-ops", version = "0.3.3", features = ["test-components"] }
 
 [features]
 # Mirrors the workspace root's `test-components` gate so that
