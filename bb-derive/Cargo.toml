@@ -1,0 +1,30 @@
+# bb-derive — proc-macro support for the bytesandbrains framework.
+#
+# Ships the `#[derive(bb::Concrete)]` + per-role `#[derive(bb::<Role>)]`
+# proc-macros that emit the `ConcreteComponent` + `AnyComponent` +
+# `inventory::submit!` + `<Role>Runtime` bridge for a struct. The
+# `register_op!` / `register_protocol!` declarative macros cover the
+# atomic-op + multi-role bring-up paths.
+
+[package]
+name        = "bb-derive"
+description = "Proc-macro support for the bytesandbrains framework."
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn          = { version = "2", features = ["full"] }
+quote        = "1"
+proc-macro2  = "1"
+

@@ -1,0 +1,72 @@
+# bb-runtime — sans-IO engine for the bytesandbrains framework.
+#
+# Hosts Node + Engine + Framework + role-runtime traits + Contract
+# trait family + the runtime-side syscall registration framework
+# + snapshot/restore.
+#
+# Depends on: bb-ir (foundation). NOT bb-compiler — bb-runtime
+# accepts the compiled `ModelProto` directly via `bb_runtime::install`
+# and never re-runs the compiler.
+
+[package]
+name          = "bb-runtime"
+description   = "Sans-IO engine for the bytesandbrains framework — Node, Engine, Framework, Backends, roles, snapshot, runtime-side syscalls."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lib]
+
+# docs.rs builds with all features enabled so feature-gated symbols
+# (tracing-otel exporter constructors, test-components hooks) render
+# in the published doc set.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default      = []
+tracing-otel = [
+    "dep:tracing-subscriber",
+    "dep:tracing-opentelemetry",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+]
+# Exposes test-only entry points (`Engine::install_graph_for_test`,
+# `Engine::op_ref_at`, `GraphSlot::new_for_test`) for integration
+# tests in the facade crate and downstream consumers building test
+# harnesses against the engine.
+test-components = []
+
+[dependencies]
+bb-ir            = { path = "../bb-ir", version = "0.3.2" }
+bb-derive        = { path = "../bb-derive", version = "0.3.2" }
+prost            = { workspace = true }
+tracing          = { workspace = true }
+serde            = { workspace = true }
+bincode          = { workspace = true }
+concurrent-queue = "2"
+atomic-waker     = "1"
+getrandom        = "0.2"
+inventory        = "0.3"
+
+bs58             = { version = "0.5", default-features = false, features = ["alloc"] }
+unsigned-varint  = "0.8"
+
+tracing-subscriber    = { version = "0.3", optional = true, features = ["registry"] }
+tracing-opentelemetry = { version = "0.31", optional = true }
+opentelemetry         = { version = "0.30", optional = true }
+opentelemetry_sdk     = { version = "0.30", optional = true }
+opentelemetry-otlp    = { version = "0.30", optional = true, features = ["grpc-tonic"] }
+
+[dev-dependencies]
+# Only the snapshot round-trip test needs to mint a SHA-256 multihash
+# PeerId; PeerId itself wraps multihash::Multihash through bb-ir.
+multihash        = { version = "0.19", default-features = false, features = ["alloc", "serde"] }

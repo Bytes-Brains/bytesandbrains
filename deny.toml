@@ -1,0 +1,145 @@
+# cargo-deny configuration for bytesandbrains
+#
+# Pins the allow-list of dependency licenses so any future transitive
+# dependency that lands a non-permissive license (GPL / LGPL / SSPL /
+# BUSL / proprietary) fails CI before it can compromise the AGPL +
+# commercial dual-license model.
+#
+# Run locally:   cargo deny check
+# Just one check: cargo deny check licenses
+#
+# Install:       cargo install --locked cargo-deny
+
+# ── Licenses ───────────────────────────────────────────────────────────
+
+[licenses]
+# Allow-list with two sections:
+#   (a) Our own outbound license — applies to the workspace crates.
+#   (b) Dependency licenses — must allow BOTH distribution under our
+#       outbound AGPL-3.0-or-later AND inclusion in commercial
+#       closed-source licenses granted separately by Bytes and Brains
+#       LLC as the sole copyright holder.
+#
+# Anything not in this list causes `cargo deny check licenses` to
+# fail. To add a new license, audit it against both criteria and add
+# it here with a comment explaining the audit decision.
+allow = [
+    # ── (a) Our own outbound license ───────────────────────────────
+    # AGPL-3.0-or-later applies to the workspace crates themselves
+    # (bytesandbrains, bb-derive, bytesandbrains-sim).
+    # Dependencies are NOT permitted under AGPL — they would block
+    # the commercial-relicensing path.
+    "AGPL-3.0-or-later",
+
+    # ── (b) Permissive dependency licenses ─────────────────────────
+    # The bulk of the Rust ecosystem.
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",  # Apache-2.0 + extra patent grant.
+
+    # Permissive BSD family.
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+
+    # Permissive — used by rustls, ring, untrusted, rustls-webpki
+    # (matched via compound `Apache-2.0 OR ISC OR MIT` expressions).
+    "ISC",
+
+    # Permissive — used by foldhash, tinyvec, lru-slab.
+    "Zlib",
+
+    # Public-domain equivalent — used by BurntSushi's regex crates
+    # (memchr, aho-corasick, byteorder, termcolor, walkdir).
+    "Unlicense",
+
+    # Modern Unicode license used by ICU crates. Functionally
+    # permissive; allows redistribution and commercial use.
+    "Unicode-3.0",
+
+    # Weak (file-level) copyleft — allows static linking into
+    # commercial binaries as long as the MPL'd files themselves are
+    # not modified. Currently only relevant to `attohttpc`, pulled
+    # transitively by `libp2p-upnp` (which we do not enable). Kept
+    # defensively so enabling `upnp` later doesn't break CI.
+    "MPL-2.0",
+]
+
+# Don't fail CI just because an allow-list entry hasn't been
+# encountered — compound expressions like "Apache-2.0 OR ISC OR MIT"
+# match via the first acceptable license, leaving the others
+# "unmatched" but legitimately present in the allow-list defensively.
+unused-allowed-license = "allow"
+
+# Some crates declare unusual SPDX expressions (e.g. "MIT/Apache-2.0"
+# with a slash instead of "MIT OR Apache-2.0"). cargo-deny normalises
+# these but we set the threshold to require a confident match.
+confidence-threshold = 0.93
+
+# Per-crate exceptions (use sparingly). Empty for now.
+exceptions = []
+
+# Explicitly deny known-bad license families. Listed for documentation;
+# anything not in `allow` is denied anyway.
+# - GPL-* would conflict with our commercial relicensing (we can't
+#   relicense GPL'd code under a closed commercial license).
+# - LGPL-* is awkward for statically-linked Rust binaries.
+# - SSPL / BUSL / Elastic v2 are source-available but not OSS.
+
+# ── Advisories (security audit) ────────────────────────────────────────
+
+[advisories]
+# RustSec advisory database checks.
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# Fail CI on any unmaintained / yanked / vulnerable crate.
+yanked = "deny"
+
+# Crates with known advisories and no fixed version — list here with
+# a written justification. Each ignore should be revisited when its
+# upstream lands a fix.
+ignore = [
+    # bincode 1.3.3 — RUSTSEC-2025-0141. The bincode team has ceased
+    # development; v1.3.3 is the final release. There is no CVE, only
+    # a maintenance-status advisory. We use bincode for the
+    # `codebook` feature's serialization of PQ codebooks; migrating
+    # to postcard or rkyv is tracked as a separate task and not a
+    # blocker for the AGPL or commercial license.
+    # Target removal: when bb-runtime's slot-value serde migrates off bincode
+    # (postcard candidate). Not a blocker for 0.3.x; revisit by 0.5.x.
+    { id = "RUSTSEC-2025-0141", reason = "bincode unmaintained; migration to postcard planned separately" },
+
+    # paste 1.0.15 — RUSTSEC-2024-0436. dtolnay archived the `paste`
+    # crate; no longer maintained. There is no CVE. paste is pulled
+    # transitively four levels deep via libp2p-tcp → if-watch →
+    # netlink-packet-core. Upstream-only fix; we have no path to
+    # remediate without dropping libp2p-tcp. Revisit when libp2p
+    # adopts `pastey` (the maintained fork) or netlink-packet-core
+    # migrates.
+    # Target removal: when libp2p adopts `pastey` (the maintained fork) or
+    # netlink-packet-core migrates off paste. Outside our control; revisit
+    # quarterly via `cargo deny check` on each dependency bump.
+    { id = "RUSTSEC-2024-0436", reason = "transitive via libp2p-tcp; no upstream fix available" },
+]
+
+# ── Sources (where deps come from) ────────────────────────────────────
+
+[sources]
+# Disallow random git deps; only registries we explicitly trust.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+# ── Bans (duplicate versions, banned crates) ───────────────────────────
+
+[bans]
+# Multiple versions of the same crate bloat the binary and slow builds
+# but are sometimes unavoidable in a large workspace. We warn rather
+# than deny.
+multiple-versions = "warn"
+wildcards = "deny"  # No `version = "*"` deps.
+
+# Crates we never want pulled in, with a reason.
+deny = []

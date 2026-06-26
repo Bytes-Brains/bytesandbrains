@@ -1,0 +1,63 @@
+name: "Bug report"
+description: Report a defect in the bytesandbrains library or one of its crates.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: crate
+    attributes:
+      label: Affected crate
+      description: Which crate exhibits the bug?
+      options:
+        - bb-ir
+        - bb-runtime
+        - bb-dsl
+        - bb-compiler
+        - bb-ops
+        - bb-derive
+        - bytesandbrains (umbrella)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Minimal sequence of steps (and code if applicable) that reliably triggers the bug.
+      placeholder: |
+        1. Build with `cargo build -p bb-runtime`
+        2. Run `...`
+        3. Observe failure at step N
+    validations:
+      required: true
+  - type: textarea
+    id: expected-engine-step
+    attributes:
+      label: Expected EngineStep sequence
+      description: The EngineStep sequence you expected the runtime to emit.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: observed-engine-step
+    attributes:
+      label: Observed EngineStep sequence
+      description: The EngineStep sequence the runtime actually emitted.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS and `rustc --version` / `cargo --version` output.
+      placeholder: "macOS 14.5; rustc 1.78.0 (9b00956e5 2024-04-29); cargo 1.78.0"
+    validations:
+      required: true
+  - type: textarea
+    id: debug-log
+    attributes:
+      label: Debug log
+      description: Optional `RUST_LOG=debug` output or backtrace.
+      render: shell
+    validations:
+      required: false

@@ -1,0 +1,43 @@
+# bb-ir — foundation IR crate.
+#
+# Hosts the prost-generated ONNX + `bb.core` proto types, the
+# polymorphic type system (`TypeNode` lattice + relations), the
+# metadata-key catalog, the wire envelope, the inventory registry,
+# and the cross-cutting IR helpers consumed by every other crate.
+# No workspace deps — `bb-ir` is the leaf of the dependency DAG.
+
+[package]
+name          = "bb-ir"
+description   = "Foundation IR types for the bytesandbrains framework — prost-generated ONNX + `bb.core` proto bindings."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lib]
+
+[dependencies]
+prost           = { workspace = true }
+serde           = { workspace = true }
+bincode         = { workspace = true }
+# Global registry for concrete components + custom ops. Library
+# makers `#[derive(bb::Index)]` (etc.) on their structs; the
+# derive emits an `inventory::submit!` registering the type's
+# serialize/restore fn pointers keyed by TYPE_NAME.
+inventory       = "0.3"
+# Peer identity — multihash + base58 to match libp2p's wire format.
+multihash       = { version = "0.19", default-features = false, features = ["alloc", "serde"] }
+bs58            = { version = "0.5", default-features = false, features = ["alloc"] }
+# Canonical Rust newtypes for IEEE-754 half-precision floats — `half::f16`
+# (binary16) and `half::bf16` (brain-float). Used as the storage Rust type
+# for `TYPE_TENSOR_F16` and `TYPE_TENSOR_BF16` so `[u16]` can mean an
+# unsigned-int tensor, not a packed half-float.
+half            = { version = "2", default-features = false, features = ["serde"] }
+
+[build-dependencies]
+prost-build = { workspace = true }

@@ -1,0 +1,83 @@
+name: Publish to crates.io
+
+# Runs on the PUBLIC repo (Bytes-Brains/bytesandbrains). The bb-private
+# release flow tags + creates a GitHub release but does NOT publish.
+# mirror-public.yml force-pushes the filtered snapshot and the tag onto
+# this repo; that tag push fires this workflow, which uploads the seven
+# workspace crates in dependency order. The source tarballs crates.io
+# receives are therefore only what the public repo contains — tests/,
+# docs/internal/, KademliaHand, CLAUDE.md, and other private content
+# never leave bb-private.
+
+on:
+  push:
+    tags:
+      # mirror-public.yml propagates the umbrella crate's tag onto
+      # this repo on every release. Matching the same shape here
+      # keeps the trigger surface aligned and avoids per-package
+      # tag noise firing the publish chain multiple times.
+      - 'bytesandbrains-v*.*.*'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-crates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish workspace crates in dependency order
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Order is the workspace dep DAG. A dependent crate must wait
+          # for its dependencies to land on the crates.io index before
+          # `cargo publish` will resolve them. `--no-verify` skips the
+          # full local build (bb-private CI already verified this code;
+          # the mirror is a strict subset).
+          #
+          # Real DAG (verified against per-crate Cargo.toml):
+          #   bb-ir, bb-derive: no internal deps (foundation)
+          #   bb-runtime:       depends on bb-ir, bb-derive
+          #   bb-dsl:           depends on bb-ir, bb-runtime
+          #   bb-ops:           depends on bb-ir, bb-dsl, bb-runtime, bb-derive
+          #   bb-compiler:      depends on bb-ir, bb-dsl, bb-runtime, bb-ops
+          #   bytesandbrains:   depends on all
+          ORDER=(bb-ir bb-derive bb-runtime bb-dsl bb-ops bb-compiler bytesandbrains)
+
+          publish_with_retry() {
+            local crate="$1"
+            local attempt=0
+            local max_attempts=6
+            local backoff=20
+            until cargo publish -p "$crate" --no-verify; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "::error::Failed to publish $crate after $max_attempts attempts."
+                exit 1
+              fi
+              echo "Publish of $crate failed (attempt $attempt). Retrying in ${backoff}s; the index may not have caught up to the previous crate yet."
+              sleep "$backoff"
+              backoff=$((backoff * 2))
+            done
+            echo "Published $crate. Sleeping 30s to give the crates.io index time to update before publishing the next crate."
+            sleep 30
+          }
+
+          for crate in "${ORDER[@]}"; do
+            publish_with_retry "$crate"
+          done

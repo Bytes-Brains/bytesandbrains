@@ -1,0 +1,6 @@
+[toolchain]
+# v0.6 Commit 4.2: dropped `generic_const_exprs` from PQ; the crate
+# builds on stable. Pinning to a recent stable channel keeps CI in
+# sync with the MSRV declared in Cargo.toml.
+channel = "1.86"
+components = ["clippy", "rustfmt"]

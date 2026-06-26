@@ -1,0 +1,260 @@
+// bytesandbrains — Core proto schema.
+//
+// One file, three concerns:
+//
+//   1. Wire envelope — the unit of inter-Node delivery. See WIRE.md
+//      and IR_AND_DSL.md §5b for the canonical contract. Every byte
+//      the framework hands to transport, and every byte transport
+//      hands back, rides as one `WireEnvelope`.
+//
+//   2. Data-plane batching — `SlotFillBatch` + `SlotFill` carry one
+//      or more typed slot fills inside a `bb.wire v1` envelope.
+//
+//   3. Snapshot schemas — `NodeSnapshotProto` +
+//      `ComponentSnapshotProto` capture the on-disk shape of a
+//      Node's persistent state, per ENGINE.md §15 and
+//      AUTHORING_COMPONENTS.md §14.
+//
+// Cross-language consumers (FFI bindings, transport adapters,
+// snapshot tooling) read this schema directly. The Rust impl in
+// `src/envelope.rs` + `src/snapshot.rs` is hand-written prost
+// matching this file 1:1.
+//
+// Compatibility rule: fields are append-only with stable field
+// numbers. New opsets do NOT require a schema change — they're new
+// values for the `domain` / `message_type` strings, both of which
+// are length-prefixed in proto. Snapshot schema versions bump via
+// `NodeSnapshotProto.schema_version` for breaking changes.
+
+syntax = "proto3";
+
+package bb.core;
+
+option optimize_for = LITE_RUNTIME;
+
+import "onnx-ml.proto";
+
+// ────────────────────────────────────────────────────────────────────
+// Section 1 — Wire envelope
+// ────────────────────────────────────────────────────────────────────
+//
+// BB addresses are MULTIADDRS (libp2p-style typed protocol
+// segments — see docs/ADDRESSING.md). The address routes the
+// envelope; the receiver parses each fill's `dest_suffix` to find
+// the target slot or component, without any subscription table,
+// opset routing key, or message_type-keyed HashMap.
+
+// Request/response correlation discriminator.
+enum CorrelationKind {
+  // Fire-and-forget — no correlation header.
+  NONE = 0;
+
+  // The envelope opens a new request. The `wire_req_id` is the
+  // sender's token; the receiver echoes it back inside a RESPONSE.
+  REQUEST = 1;
+
+  // The envelope answers a prior REQUEST. The `wire_req_id` matches
+  // the original request's token.
+  RESPONSE = 2;
+}
+
+// Correlation header. Empty `wire_req_id` (= 0) is valid only when
+// `kind == NONE`.
+message WireCorrelation {
+  CorrelationKind kind = 1;
+  uint64 wire_req_id = 2;
+}
+
+// The unit of wire delivery — one delivery to one peer. Per the
+// analyzer's batching (ANALYSIS.md §9 analyze_wire_edges), a Send
+// op with N typed inputs packs all N as `fills` so one envelope
+// completes the data-plane DAG.
+message WireEnvelope {
+  // Ordered destination address list. The framework's wire syscall
+  // populates this from the `AddressBook` at dispatch time — it's
+  // the resolved snapshot of `AddressBook::lookup(peer)` at the
+  // moment the envelope was minted. The host's transport adapter
+  // picks one of these entries based on its networking
+  // capabilities (IPv4 reachability, QUIC support, relay
+  // preference, etc.). Each entry is `Address::to_bytes()`. See
+  // docs/ADDRESSING.md for the resolution semantics; lookups that
+  // miss surface `EngineStep::PeerResolveFailed` instead of
+  // producing an envelope.
+  repeated bytes dest_peer_addresses = 1;
+
+  // One or more slot fills delivered atomically.
+  repeated SlotFill fills = 2;
+
+  // Request/response correlation. Control planes MAY use it
+  // (Kademlia pairs FindNode ↔ FindNodeReply).
+  WireCorrelation correlation = 3;
+
+  // PLAN tender-noodling-sky Phase 3e-iv — Dapper-style deadline
+  // propagation. Forward-direction envelopes (requests) carry the
+  // sender's remaining budget for the whole chain. Each receiver
+  // subtracts its own service time before forwarding downstream. A
+  // value of 0 means "no propagated deadline" (the receiver falls
+  // back to its own static `per_hop_budget_ns × chain_depth`).
+  uint64 remaining_deadline_ns = 4;
+
+  // PLAN tender-noodling-sky Phase 3e-iv — reverse-path piggyback.
+  // Response envelopes attach EdgeRttReport entries describing the
+  // sender's observed outgoing-edge RTTs. The caller consumes the
+  // reports into `AddressBookEntry.reported_outgoing` so multi-hop
+  // chain budgets compose from one entry per direct neighbor.
+  repeated EdgeRttReport edge_rtt_reports = 5;
+
+  // Phase 10.4 — Multihash bytes of the originating peer (the
+  // sender's PeerId.to_bytes()). Lets the receiver attribute the
+  // envelope without consulting a separate adapter-side lookup,
+  // which is required for the typed `envelope_src_peer` runtime
+  // surface (no PeerId(0) fabrication — see Phase 4.4 / theme T5).
+  bytes src_peer_bytes = 6;
+
+  // Phase 10.4 — WireEnvelope schema version. Stamped by the
+  // sender (compiler at install seam supplies a single
+  // `SCHEMA_VERSION_V1 = 1`). Validated by `EnvelopeCodec::
+  // decode_capped` on every inbound buffer. Surfaces as
+  // `EnvelopeDecodeError::VersionMismatch { got, supported }` on
+  // disagreement so the receiver REJECTS unknown future versions
+  // rather than mis-parsing them. Bump when any field's semantics
+  // (not just shape — proto is structurally forward-compatible)
+  // changes in a way old code cannot soundly handle.
+  uint32 schema_version = 7;
+
+  // Sender-claimed local-address list — the snapshot of the
+  // sender's `AddressBook` entry for its own PeerId at the moment
+  // the envelope was minted. Each entry is `Address::to_bytes()`.
+  // The receiver merges the list into its own `AddressBook` entry
+  // for `src_peer` so future replies can dial back on any of the
+  // sender's reachable interfaces. Empty means the sender chose
+  // not to advertise (e.g. `local_addresses()` was empty); the
+  // receiver leaves its existing entry untouched. Bounded at decode
+  // time by `EnvelopeCaps.max_src_peer_addresses` +
+  // `max_src_peer_address_bytes` to cap adversarial pre-allocation.
+  repeated bytes src_peer_addresses = 8;
+}
+
+// PLAN tender-noodling-sky Phase 3e-iv — per-edge RTT report
+// piggybacked on a response envelope. The sending peer reports its
+// observed SRTT/RTTVAR for its outgoing edge to `next_hop_site_id`
+// in chain `chain_id`. The caller writes the report into
+// `AddressBookEntry.reported_outgoing[(next_hop, chain_id)]` so a
+// multi-hop chain budget can be composed from a single direct
+// neighbor's address-book entry.
+message EdgeRttReport {
+  // Logical site identifier of the next hop in the chain. Encoded
+  // as a u64 — derived from the receiver's NodeSiteId.
+  uint64 next_hop_site_id = 1;
+  // Stable identifier hashed from the analyzer's chain_targets CSV.
+  uint64 chain_id = 2;
+  // Zero-based hop position within the chain.
+  uint32 hop_index = 3;
+  // Jacobson SRTT for this edge in nanoseconds.
+  uint64 srtt_ns = 4;
+  // Jacobson RTTVAR for this edge in nanoseconds.
+  uint64 rttvar_ns = 5;
+  // Sample count backing the EMA — lets the caller weight the
+  // report (e.g. discount reports with very few samples).
+  uint64 sample_count = 6;
+}
+
+// One slot-fill record carried inside a `WireEnvelope`. Each fill
+// names its destination via a multiaddr suffix that's appended to
+// the receiver's self-identity to form the full address.
+message SlotFill {
+  // Per-slot multiaddr suffix encoded via the canonical Address
+  // binary form. Two shapes per ADDRESSING.md:
+  //   `/graph/{id}/site/{site}`     — data-plane slot fill
+  //   `/component/{cref}/op/{name}` — control-plane component dispatch
+  // The receiver parses the suffix; the trailing Site/Op segment
+  // identifies the decoder + dispatch target.
+  bytes dest_suffix = 1;
+
+  // Wire-encoded bytes; empty when `trigger_only=true`. For
+  // data-plane fills the decoder comes from the Site's declared
+  // TypeMeta. For control-plane fills the component decodes its
+  // own payload.
+  bytes payload = 2;
+
+  // True when the consumer only reads the firing signal, not the
+  // value. Set by the analyzer's `analyze_wire_edges` pass.
+  bool trigger_only = 3;
+
+  // Phase 12.2 — Per-fill type-hash discriminator. Stamped by the
+  // sender's wire encoder from the slot value's static
+  // `T::HASH` constant (every wire-eligible type derives a
+  // stable u64 hash). Receiver dispatches via
+  // `if fill.type_hash == T::HASH { T::deserialize(&fill.payload) }`,
+  // so mis-encoded fills surface as an explicit type mismatch
+  // instead of silently deserializing as the wrong type
+  // (S10 closure).
+  uint64 type_hash = 4;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Section 3 — Peer identity
+// ────────────────────────────────────────────────────────────────────
+
+// Peer identity record. Used inside snapshots + by the framework's
+// AddressBook primitive (ENGINE.md §3 framework primitives).
+message PeerProto {
+  bytes peer_id = 1;
+  repeated string addresses = 2;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Section 4 — Snapshot schemas
+// ────────────────────────────────────────────────────────────────────
+
+// Top-level snapshot of a Node's state. Produced by
+// `Node::snapshot()`; consumed by `Node::restore(snap)`. See
+// ENGINE.md §15 and AUTHORING_COMPONENTS.md §14 for the lifecycle.
+message NodeSnapshotProto {
+  // Snapshot format version. Bump on breaking changes; the Node
+  // refuses restore from older versions unless a migrator is wired.
+  uint32 schema_version = 1;
+
+  // The Node's local PeerId, multihash-encoded.
+  bytes peer_id = 2;
+
+  // Addresses the Node was listening on at snapshot time.
+  repeated string listen_addrs = 3;
+
+  // External (publicly observable) addresses that had been confirmed.
+  repeated string external_addrs = 4;
+
+  // One entry per (concrete_type, instance_id) component the Node
+  // owns. Restored by the framework calling the captured
+  // `ConcreteComponent::restore_fn(payload)` for each entry.
+  repeated ComponentSnapshotProto components = 5;
+
+  // When the snapshot was captured (Unix microseconds).
+  int64 captured_at_unix_micros = 6;
+
+  // One entry per registered BuiltModule, encoded as an ONNX
+  // `ModelProto` (serialized bytes). The Node restores its topology
+  // including every (concrete_type, instance_id) metadata key on
+  // each NodeProto — the same data Node.build() walked at
+  // construction.
+  repeated bytes modules = 7;
+}
+
+// Snapshot of a single Component's state, opaque to the framework.
+message ComponentSnapshotProto {
+  // `ConcreteComponent::TYPE_NAME` of the component. The framework
+  // routes the payload to the matching captured `restore_fn` during
+  // `Node::restore` by `(type_name, instance_id)` lookup.
+  string type_name = 1;
+
+  // Per-Node instance disambiguator. Matches the `instance_id`
+  // assigned at Module::build() recording time
+  // (`Graph::register_concrete::<T>(&T)`).
+  uint32 instance_id = 2;
+
+  // The component's serialized state bytes — exactly what
+  // `ConcreteComponent::serialize(&self) -> Vec<u8>` returned.
+  // Restored via `ConcreteComponent::restore(bytes) -> Result<Self,
+  // RestoreError>`.
+  bytes payload = 3;
+}

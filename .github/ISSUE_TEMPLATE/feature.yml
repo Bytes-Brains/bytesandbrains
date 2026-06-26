@@ -1,0 +1,85 @@
+name: Feature request
+description: Propose a new capability, surface, or extension point
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the use case, not the implementation. We may have a
+        different shape in mind that solves the same problem. See
+        [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for context on
+        how features land during v0.x.
+
+  - type: dropdown
+    id: use-case
+    attributes:
+      label: Use case
+      description: Which workload does this feature serve?
+      options:
+        - Federated learning
+        - Gossip overlay
+        - Custom strategy
+        - Contract author
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contract-surface
+    attributes:
+      label: Proposed Contract surface
+      description: |
+        Which Contract trait does this touch? Pick "new contract" if
+        the feature needs a role that does not exist today, or
+        "none / unsure" if the shape is open.
+      options:
+        - Backend
+        - Index
+        - Strategy
+        - new contract
+        - none / unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / problem
+      description: |
+        What are you trying to do? What breaks or is awkward today?
+        Concrete scenarios beat abstract wishlists.
+      placeholder: |
+        I am building X. When I try to Y, the framework forces me to Z,
+        which does not compose with W because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: api-surface
+    attributes:
+      label: Proposed API surface and public-API impact
+      description: |
+        Sketch the user-facing shape — trait signatures, DSL syntax,
+        derive attributes, or syscall names. Call out anything that
+        would break existing `bb::install` / `Compiler` / `Module`
+        callers, and whether the change is additive or requires a
+        version bump.
+      placeholder: |
+        New trait in `bb-runtime/src/contracts/`:
+        ```rust
+        pub trait MyRole {
+            fn step(&mut self, ...) -> ...;
+        }
+        ```
+        Additive — no existing callers affected.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: implementation
+    attributes:
+      label: Implementation
+      options:
+        - label: I am willing to implement this (subject to maintainer sign-off on the design).
+          required: false

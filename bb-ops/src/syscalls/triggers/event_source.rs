@@ -1,0 +1,46 @@
+//! `EventSource` syscall - emits Trigger on bus events.
+//!
+//! Subscription wiring per IR_AND_DSL.md §5a + ENGINE.md §6 Phase 3:
+//! the Node install path parses each `EventSource` NodeProto's
+//! `kind` attribute and calls `Engine::register_event_subscription`
+//! so Phase 3's bus drain pushes the op onto the frontier when a
+//! matching event arrives. The op body fires the trigger output;
+//! repeated firings come from repeated event arrivals.
+
+use bb_ir::proto::onnx::NodeProto;
+use bb_runtime::atomic::DispatchResult;
+use bb_runtime::bus::OpError;
+use bb_runtime::runtime::RuntimeResourceRef;
+use bb_runtime::slot_value::SlotValue;
+use bb_runtime::syscall::values::TriggerValue;
+
+/// Marker struct.
+pub struct EventSourceOp;
+
+/// Op domain.
+pub const DOMAIN: &str = "ai.bytesandbrains.syscall";
+/// Op type name.
+pub const OP_TYPE: &str = "EventSource";
+
+/// Invoke fn - emits Trigger output on every firing.
+pub fn invoke(
+    _node: &NodeProto,
+    _inputs: &[(&str, &dyn SlotValue)],
+    _ctx: &mut RuntimeResourceRef<'_>,
+) -> Result<DispatchResult, OpError> {
+    Ok(DispatchResult::Immediate(vec![(
+        "event".to_string(),
+        Box::new(TriggerValue),
+    )]))
+}
+
+use bb_runtime::registry::OpRegistration as _BbOpsSyscallReg;
+
+inventory::submit! {
+    _BbOpsSyscallReg {
+        domain: DOMAIN,
+        op_type: OP_TYPE,
+        invoke,
+        kind: bb_runtime::registry::RegistrationKind::Syscall,
+    }
+}

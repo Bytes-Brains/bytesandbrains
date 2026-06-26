@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Toolchain is read from rust-toolchain.toml (pinned to stable). Don't
+# override here — keeping a single source of truth means CI validates
+# the same toolchain we ship.
+#
+# Every job runs the SAME commands the local per-commit gate runs
+# (`CLAUDE.md` "Per-commit gate"): `--features test-components
+# --locked`. `--locked` enforces Cargo.lock as the build manifest so a
+# silent dep bump can't slip into CI. `--features test-components` is
+# the feature flag every workspace member's test fixtures depend on.
+
+jobs:
+  check:
+    name: Check (test-components)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo check --workspace --features test-components --all-targets --locked
+
+  check-no-default-features:
+    # Catches feature-gating bugs that --features test-components
+    # hides. If a path is accidentally outside its #[cfg(feature =
+    # "...")] gate, this is the job that finds it.
+    name: Check (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo check --workspace --no-default-features --locked
+
+  test:
+    name: Test (workspace)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo test --workspace --features test-components --locked
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo clippy --workspace --all-targets --features test-components --locked -- -D warnings
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: cargo doc --workspace --no-deps --features test-components --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  deny:
+    # cargo-deny enforces the dependency license allow-list (see
+    # `deny.toml`) and the RustSec advisory database. Catches any new
+    # transitive dep that arrives under a GPL/LGPL/proprietary license
+    # incompatible with our AGPL + commercial dual-license model.
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses advisories sources bans

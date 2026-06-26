@@ -1,0 +1,29 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Editor / IDE state
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Environment
+.envrc
+.env
+*.log
+
+# Local agent state — never check in (settings files leak absolute
+# paths; lock files are per-machine).
+.claude/
+.superpowers/
+
+# Scratch + planning files. Internal audits and one-shot scripts
+# do not belong in the published tree.
+PLAN.md
+AUDIT-*.md
+audit-*.md
+audit-*.json
+code-correction-*.json

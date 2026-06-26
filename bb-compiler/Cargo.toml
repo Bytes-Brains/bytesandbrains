@@ -1,0 +1,45 @@
+# bb-compiler — compilation pipeline for the bytesandbrains framework.
+#
+# Hosts the `Compiler` driver, the canonical pass pipeline
+# (structural + per-partition), and `CompileError`. Output is one
+# stamped `ModelProto` per `compile()` call — the proto carries the
+# compilation passport + binding table; install reads them back.
+#
+# Depends on: bb-ir (foundation), bb-dsl (Module trait + Graph
+# recorder + RecordedModule hand-off), bb-runtime (trait bounds on
+# `Compiler::bind_<role>::<T>`).
+
+[package]
+name          = "bb-compiler"
+description   = "Compiler pipeline for the bytesandbrains framework — Compiler driver, CompilerPass trait, canonical pass list, BuildError."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lib]
+
+[dependencies]
+bb-ir       = { path = "../bb-ir", version = "0.3.2" }
+bb-dsl      = { path = "../bb-dsl", version = "0.3.2" }
+# `CompiledArtifact.dispatch_table` carries
+# `ProtocolDispatchFn` pointers - the engine-internal type the
+# closures get stamped against. bb-runtime depends on bb-ir, not
+# bb-compiler, so this dep is acyclic.
+bb-runtime  = { path = "../bb-runtime", version = "0.3.2" }
+serde       = { workspace = true }
+
+[dev-dependencies]
+prost    = { workspace = true }
+bb-ops   = { path = "../bb-ops", version = "0.3.2", features = ["test-components"] }
+
+[features]
+# Mirrors the workspace root's `test-components` gate so that
+# `cargo test --workspace --features test-components` exercises the
+# binding-level storage-type test.
+test-components = []

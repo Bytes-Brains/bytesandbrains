@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security disclosure
+    about: Report security issues privately per SECURITY.md
+    url: https://github.com/BytesAndBrains/bytesandbrains/blob/main/SECURITY.md

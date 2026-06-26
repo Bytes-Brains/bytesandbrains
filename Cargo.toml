@@ -1,0 +1,127 @@
+# bytesandbrains — workspace manifest + root crate
+
+[workspace]
+resolver = "2"
+members = [
+    "bb-compiler",
+    "bb-derive",
+    "bb-dsl",
+    "bb-ir",
+    "bb-ops",
+    "bb-runtime",
+]
+
+[workspace.package]
+version       = "0.3.2"
+edition       = "2021"
+rust-version  = "1.86"
+license       = "AGPL-3.0-or-later"
+repository    = "https://github.com/Bytes-Brains/bytesandbrains"
+homepage      = "https://bytesandbrains.com"
+authors       = ["Bytes & Brains"]
+keywords      = ["machine-learning", "federated", "decentralized", "p2p", "onnx"]
+categories    = ["science", "network-programming", "concurrency"]
+
+[workspace.dependencies]
+prost         = "0.13"
+prost-build   = "0.13"
+tracing       = "0.1"
+serde         = { version = "1", features = ["derive"] }
+bincode       = "1"
+ndarray       = { version = "0.16", features = ["serde"] }
+
+# ───────────────────────── Root crate ─────────────────────────
+
+[package]
+name          = "bytesandbrains"
+description   = "Composable building blocks for decentralized + federated machine learning."
+# CHANGELOG.md stays out of the published tarball — release notes
+# are internal-detail-heavy. Public release notes live on the
+# release page + crates.io's per-version description.
+exclude       = ["CHANGELOG.md", "docs/internal/", "tests/", "examples/", "**/*_tests.rs"]
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+# docs.rs builds with all features enabled so feature-gated re-exports
+# (test-components, tracing-otel) render in the published doc set.
+# `--cfg docsrs` lets `#[cfg(docsrs)]` items (if any) opt into doc-only
+# code paths without polluting the regular build.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["cpu-backend"]
+# Pure-Rust reference CPU backend at
+# `bytesandbrains::ops::backends::cpu`.
+cpu-backend = ["bb-ops/cpu-backend"]
+# OpenTelemetry tracing exporter — opt-in OTLP subscriber
+# constructor at `bytesandbrains::telemetry::otel`.
+tracing-otel = ["bb-runtime/tracing-otel"]
+# Test-only components (KademliaHand) and engine test-only entry
+# points (`install_graph_for_test`, `op_ref_at`).
+test-components = ["bb-ops/test-components", "bb-runtime/test-components"]
+
+[dependencies]
+# The facade is a thin re-export shell over the workspace crates.
+# Every transitive dep (prost, tracing, serde, bincode, inventory,
+# multihash, bs58, unsigned-varint, getrandom, etc.) rides in via
+# the workspace crates that actually consume them. The facade
+# itself has no direct external dependencies; the `tracing-otel`
+# feature delegates to `bb-runtime/tracing-otel` so the optional
+# OTel stack lives where it's actually used.
+bb-compiler     = { path = "bb-compiler", version = "0.3.2" }
+bb-derive       = { path = "bb-derive", version = "0.3.2" }
+bb-dsl          = { path = "bb-dsl", version = "0.3.2" }
+bb-ir           = { path = "bb-ir", version = "0.3.2" }
+bb-runtime      = { path = "bb-runtime", version = "0.3.2", default-features = false }
+# bb-ops sits BELOW bb-runtime in the dep DAG (bb-runtime hosts the
+# Engine + SyscallRegistration framework; bb-ops's inventory
+# submissions are walked by the engine at install). Listed after
+# bb-runtime so cargo's resolution order matches the build order.
+bb-ops          = { path = "bb-ops", version = "0.3.2", default-features = false }
+
+[build-dependencies]
+prost-build = { workspace = true }
+
+[dev-dependencies]
+trybuild = "1"
+instant-distance = "0.6"
+# Used by tests/ + examples/ for serde derives on test fixtures
+# and bincode round-trips. Not part of the published facade
+# surface — moved here from [dependencies] so it's clear these
+# are exclusively development-time concerns.
+serde     = { workspace = true }
+bincode   = { workspace = true }
+prost     = { workspace = true }
+inventory = "0.3"
+# Peak-heap tracking for `tests/composite_memory_bench.rs`. Installed
+# as `#[global_allocator]` in that single test binary; each
+# integration test in `tests/` compiles as its own binary so the
+# allocator hook is scoped to the bench and does not perturb other
+# tests.
+peak_alloc = "0.2"
+
+# Integration tests that exercise the framework's bundled test
+# components (KademliaHand / KademliaMacro). Declared here so
+# `cargo test` (no features) skips them with a clean message
+# instead of failing to compile.
+[[test]]
+name = "stage9_acceptance"
+path = "tests/stage9_acceptance.rs"
+required-features = ["test-components"]
+
+[[test]]
+name = "storage_type_registry"
+path = "tests/storage_type_registry.rs"
+required-features = ["test-components"]

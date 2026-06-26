@@ -1,0 +1,58 @@
+# bb-ops — concrete components home for the bytesandbrains framework.
+#
+# Every concrete component the framework ships lives here. Library
+# authors adding a new syscall / backend kernel / role implementation
+# / protocol touch one file in `bb-ops/src/<category>/<component>/mod.rs`
+# containing the `(domain, op_type)` constants, the DSL recording
+# helper, the runtime invoke fn, the `inventory::submit!`
+# self-registration, and sibling tests. The framework crates
+# (bb-ir, bb-dsl, bb-compiler, bb-runtime) keep only abstractions
+# and remain component-agnostic.
+#
+# Depends on: bb-ir (foundation), bb-dsl (Module + Graph + Output
+# + Contract traits), bb-runtime (Engine + RuntimeResourceRef +
+# OpRegistration framework), bb-derive (proc-macros for derived
+# components).
+
+[package]
+name          = "bb-ops"
+description   = "Canonical concrete components for the bytesandbrains framework — syscalls, wire transport, backends, protocols, role implementations."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[lib]
+
+# docs.rs builds with all features enabled so feature-gated symbols
+# (cpu-backend, test-components) render in the published doc set.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["cpu-backend"]
+# Pure-Rust reference CPU backend at `bb_ops::backends::cpu`.
+cpu-backend     = ["dep:ndarray"]
+# Test-only components (KademliaHand).
+
+[dependencies]
+bb-ir       = { path = "../bb-ir", version = "0.3.2" }
+bb-dsl      = { path = "../bb-dsl", version = "0.3.2" }
+bb-runtime  = { path = "../bb-runtime", version = "0.3.2", default-features = false }
+bb-derive   = { path = "../bb-derive", version = "0.3.2" }
+prost       = { workspace = true }
+tracing     = { workspace = true }
+serde       = { workspace = true }
+bincode     = { workspace = true }
+inventory   = "0.3"
+# ndarray backs the reference `CpuBackend` kernels + graph walker;
+# gated behind the `cpu-backend` feature so consumers wiring a
+# different backend (cuda, metal, etc.) don't pull it in
+# transitively.
+ndarray     = { workspace = true, optional = true }
