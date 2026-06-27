@@ -20,7 +20,7 @@ the graph across BB Nodes, inlines role behavior, dispatches each op
 to one of your bound runtime impls, and routes inter-Node values via
 a single wire envelope.
 
-**Status: v0.3.0** — the canonical authoring + runtime surface. See
+**Status: v0.3** — the canonical authoring + runtime surface. See
 [`docs/`](docs/) for the design specification.
 
 ## Quick start
@@ -37,42 +37,44 @@ bytesandbrains = "0.3"
 ```rust
 use std::task::{Context, Poll, Waker};
 
-use bytesandbrains::ops::backends::cpu::CpuBackend;
-use bytesandbrains::ops::placeholders::Backend as BackendSlot;
-use bytesandbrains::{Compiler, Config, Graph, Module, Output};
+use bytesandbrains::placeholders::{DataLoaderSlot, ModelSlot};
+use bytesandbrains::{install, Address, Compiler, Config, Graph, Module, PeerId};
 
-/// A Module is your computation. The `body()` method records DSL
-/// calls onto a `Graph` recorder; the compiler stamps the recorded
-/// `ModelProto` with the bindings the runtime needs.
-pub struct EmbeddingPipeline {
-    backend: BackendSlot,
-}
+/// A federated-learning client round. Pull a batch from the local
+/// dataset, run a forward pass through the bound model, and publish
+/// the locally-updated parameters for an aggregator to fold across
+/// peers in a later round.
+pub struct FederatedClient;
 
-impl Module for EmbeddingPipeline {
-    fn name(&self) -> &str { "EmbeddingPipeline" }
+impl Module for FederatedClient {
+    fn name(&self) -> &str { "FederatedClient" }
     fn body(&self, g: &mut Graph) {
-        let batch      = g.input("batch");
-        let normalized = self.backend.l2_normalize(g, batch);
-        let output     = self.backend.l2_normalize(g, normalized);
-        g.output("embedding", output);
+        let (batch, _labels) = DataLoaderSlot.next_batch(g);
+        let _prediction      = ModelSlot.forward(g, batch);
+        let params           = ModelSlot.params(g);
+        g.output("params", params);
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Three-phase construction: author → compile → install.
-    let module   = EmbeddingPipeline { backend: BackendSlot };
-    let model    = module.build()?;
+    // You bring concrete `Model` and `DataSource` impls — derive
+    // `bb::Concrete` + `bb::Model` / `bb::DataSource` over your
+    // types and implement the matching Contract trait. The compiler
+    // binds them to named slots at compile time; the engine never
+    // sees the concrete types directly. See
+    // `examples/single_node_federated_learning.rs` for ~100 lines
+    // of minimal stubs you can copy.
     let compiled = Compiler::new()
-        .bind_backend::<CpuBackend>("backend")
-        .compile(model)?;
+        .bind_data_source::<MyDataLoader>("data_source")
+        .bind_model::<MyModel>("model")
+        .compile(FederatedClient.build()?)?;
 
-    let peer_id  = bytesandbrains::PeerId::from(0u64);
-    let addr     = bytesandbrains::framework::Address::empty();
-    let mut node = bytesandbrains::install::install(
-        peer_id,
-        addr,
+    let peer = PeerId::from(0u64);
+    let mut node = install(
+        peer,
+        vec![Address::empty().p2p(peer)],
         compiled,
-        "EmbeddingPipeline",
+        &["FederatedClient"],
         Config::new(),
     )?;
 
