@@ -18,15 +18,18 @@ env:
 # --locked`. `--locked` enforces Cargo.lock as the build manifest so a
 # silent dep bump can't slip into CI. `--features test-components` is
 # the feature flag every workspace member's test fixtures depend on.
+#
+# Ubuntu-only on this private repo. macOS Actions minutes count 10×
+# against the free-tier monthly budget. Developers run the per-commit
+# gate locally on macOS before push, and the public mirror's CI re-runs
+# the same gate on every release (where Actions are unlimited for
+# public repos), so the macOS-specific surface is covered without
+# burning private-repo minutes here.
 
 jobs:
   check:
     name: Check (test-components)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -55,11 +58,7 @@ jobs:
 
   test:
     name: Test (workspace)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master

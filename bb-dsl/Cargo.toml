@@ -24,7 +24,7 @@ categories.workspace   = true
 [lib]
 
 [dependencies]
-bb-ir      = { path = "../bb-ir", version = "0.3.5" }
-bb-runtime = { path = "../bb-runtime", version = "0.3.5" }
+bb-ir      = { path = "../bb-ir", version = "0.3.6" }
+bb-runtime = { path = "../bb-runtime", version = "0.3.6" }
 serde      = { workspace = true }
 bincode    = { workspace = true }

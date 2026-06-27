@@ -174,7 +174,7 @@ Peer routing and intra-node slot routing are decoupled:
   reachability, QUIC support, relay preference, etc.). The DAG /
   IR / DSL still address destinations by `PeerId` — only the
   envelope-on-the-wire carries the resolved list.
-- **`src_peer_addresses`** (proto field 8, `proto/bb_core.proto:135`)
+- **`src_peer_addresses`** (proto field 8, `bb-ir/proto/bb_core.proto:135`)
   is the snapshot of the sender's `local_addresses()` at envelope-mint
   time. The wire syscall stamps it on every Send
   (`bb-ops/src/network/wire/mod.rs:196-220`); receivers feed it into
@@ -453,7 +453,7 @@ envelopes manually outside the compilation pipeline.
 |---|---|
 | `Address`, `Protocol`, `AddressBook`, `AddressBookError` | `bb-runtime/src/framework/address_book.rs` |
 | `PeerAddressBook` (identity only) | `bb-runtime/src/framework/peer_address_book.rs` |
-| Wire envelope proto (`src_peer_addresses` at field 8) | `proto/bb_core.proto:135` |
+| Wire envelope proto (`src_peer_addresses` at field 8) | `bb-ir/proto/bb_core.proto:135` |
 | Envelope encode/decode + `EnvelopeCaps` (claim caps) | `bb-runtime/src/envelope.rs:42-48,236-246` |
 | `AddressVecValue` typed carrier | `bb-runtime/src/syscall/values.rs:59-65,101` |
 | `TYPE_ADDRESS_VEC` lattice node | `bb-ir/src/types/builtins.rs:306-318,369,409` |

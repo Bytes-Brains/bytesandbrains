@@ -132,7 +132,7 @@ contributes one `SlotFill`.
 syntax = "proto3";
 package bb.core;
 
-// proto/bb_core.proto
+// bb-ir/proto/bb_core.proto
 
 enum CorrelationKind {
   NONE = 0;
@@ -177,7 +177,7 @@ message WireEnvelope {
   // was empty); the receiver leaves its existing entry untouched.
   // Bounded at decode time by `EnvelopeCaps.max_src_peer_addresses`
   // (default 8) and `max_src_peer_address_bytes` (default 256).
-  // (`proto/bb_core.proto:135`.)
+  // (`bb-ir/proto/bb_core.proto:135`.)
   repeated bytes src_peer_addresses = 8;
 }
 

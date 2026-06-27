@@ -833,7 +833,7 @@ runs after each splice that introduces `Call*` NodeProtos.
 compiled artifact — there is no wrapper struct.
 
 The proto definition is the upstream ONNX schema at
-[`proto/onnx-ml.proto`](../proto/onnx-ml.proto); `prost-build`
+[`bb-ir/proto/onnx-ml.proto`](bb-ir/proto/onnx-ml.proto); `prost-build`
 generates the Rust types in `bb-ir::proto::onnx`. The compiled form
 carries:
 
