@@ -41,10 +41,9 @@ pub(crate) fn resolve_component_dependencies(
         let entry = match find_concrete_component(concrete_type) {
             Some(e) => e,
             None => {
-                // Concrete isn't in this binary's inventory — the
-                // earlier `validate_runtime_complete` pass already
-                // surfaces this as `RuntimeIncomplete`. Skip here so
-                // the dependency pass remains a pure dep-graph check.
+                // Concrete isn't in this binary's inventory —
+                // `validate_runtime_complete` surfaces it.
+                // Skip so this pass stays a pure dep-graph check.
                 continue;
             }
         };

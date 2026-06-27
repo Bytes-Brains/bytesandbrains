@@ -1,11 +1,10 @@
-//! Lock-free MPMC ingress queue +
-//! `docs/internal/IMPLEMENTATION_PLAN.md` .
+//! Lock-free MPMC ingress queue.
 //!
 //! External tasks (transport, host invocations, off-thread
-//! completions) push `IngressEvent`s onto the queue; the engine's
-//! Phase 1 (`drain_ingress`) drains them on next poll. Lock-free
-//! via `concurrent-queue` v2; the engine sleeps on an
-//! `AtomicWaker` until a producer wakes it.
+//! completions) push `IngressEvent`s onto the queue; the engine
+//! drains them on its next poll. Lock-free via `concurrent-queue`
+//! v2; the engine sleeps on an `AtomicWaker` until a producer
+//! wakes it.
 //!
 //! `Arc<IngressQueue>` is shared between the engine and any number
 //! of external producer tasks running on different threads.
@@ -30,8 +29,8 @@ use crate::bus::{AppIngressErrorKind, AppIngressSource};
 use crate::ids::CommandId;
 
 /// Per-`fail()` detail-string hard cap. Truncated rather than rejected
-/// per spec §2.1 row S8 (the host's `Display`-rendered failure message
-/// must always land, even if oversized).
+/// so the host's `Display`-rendered failure message always lands,
+/// even when oversized.
 pub const COMPLETION_DETAIL_CAP: usize = 4 * 1024;
 
 /// Default bus capacity per ENGINE.md §16; the ingress queue size
@@ -46,10 +45,10 @@ pub const DEFAULT_INGRESS_CAPACITY: usize = DEFAULT_BUS_CAPACITY * 4;
 #[derive(Debug)]
 pub enum IngressEvent {
     /// Inbound wire envelope from the transport layer, attributed
-    /// to a source peer. Phase 1 of the poll cycle calls
-    /// `PeerGovernor::check_inbound(src_peer)`; blocked +
-    /// non-allowlisted peers are dropped before any slot is
-    /// written, surfacing as `EngineStep::PeerBlocked`.
+    /// to a source peer. The engine calls
+    /// `PeerGovernor::check_inbound(src_peer)` on ingress; blocked or
+    /// non-allowlisted peers are dropped before any slot is written,
+    /// surfacing as `EngineStep::PeerBlocked`.
     EnvelopeFrom {
         /// Peer the envelope arrived from.
         src_peer: crate::ids::PeerId,
@@ -103,14 +102,11 @@ pub enum IngressEvent {
         results: Vec<Vec<u8>>,
     },
 
-    /// Async completion FAILURE landing back at the
-    /// engine. Distinct from `Completion`: `CompletionSink::fail`
-    /// constructs THIS variant instead of re-encoding the failure
-    /// as a successful `Completion { results: <error-bytes> }`.
-    /// The engine's `handle_completion_failed` (already at
-    /// `bb-runtime/src/engine/poll.rs:67-80`) routes this directly
-    /// to the typed `OpFailed` surface so the host sees a real
-    /// error, not a success masquerade.
+    /// Async completion FAILURE landing back at the engine.
+    /// Distinct from `Completion`: `CompletionSink::fail` mints
+    /// this variant directly so `handle_completion_failed` can
+    /// route to the typed `OpFailed` surface — the host sees a
+    /// real error, not a success-bytes masquerade.
     CompletionFailed {
         /// The `CommandId` whose await failed.
         cmd_id: CommandId,
@@ -145,8 +141,8 @@ pub enum IngressEvent {
     /// rejection. The synchronous `Node::deliver_event` / `Node::invoke`
     /// path publishes directly with `&mut bus` access; this variant is
     /// the cross-thread bridge for sinks that don't hold a bus
-    /// reference. Component sees an async-op timeout in place of the
-    /// dropped completion (per spec §2.1 row S8).
+    /// reference. The Component observes an async-op timeout in place
+    /// of the dropped completion.
     AppIngressError {
         /// Which application-side entry point raised the failure.
         source: AppIngressSource,
@@ -251,8 +247,8 @@ impl IngressQueue {
         }
     }
 
-    /// Drain all available events. Called by Phase 1 of the engine
-    /// poll cycle.
+    /// Drain all available events. Called by the engine on each
+    /// poll cycle's ingress drain.
     ///
     /// Pre-reserves capacity for the bounded queue's full length so the
     /// drain Vec grows once at construction, not in `O(log n)`

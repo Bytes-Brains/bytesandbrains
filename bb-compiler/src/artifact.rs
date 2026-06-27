@@ -114,7 +114,7 @@ impl BindingSpec {
     /// downstream passes that need per-slot disambiguation should also
     /// compare `slot_id` from the IR.
     ///
-    /// Downstream consumer: `refine_polymorphic_value_info` (Task 10).
+    /// Downstream consumer: `refine_polymorphic_value_info`.
     pub(crate) fn lookup_by_role(&self, role: &str) -> Option<&BindingSlot> {
         self.slots.iter().find(|s| s.role == role)
     }

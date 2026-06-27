@@ -241,13 +241,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("─── STEP 5: Arm install-order bootstrap on every Node");
-    // F4 host-driven bootstrap: install records the bootstrap targets
-    // but no longer arms the queue. Every Node must call
-    // `run_bootstrap` to drive its install-order bootstraps to
-    // completion before the body phase observes its first poll. The
-    // leaf Modules in this composition do not override `bootstrap()`,
-    // so the call still returns immediately, but it transitions each
-    // partition into the body-ready state the engine expects.
+    // Host-driven bootstrap: every Node must call `run_bootstrap`
+    // to drive its install-order bootstraps to completion before the
+    // body phase observes its first poll. The leaf Modules in this
+    // composition do not override `bootstrap()`, so the call returns
+    // immediately, but it still transitions each partition into the
+    // body-ready state the engine expects.
     for (_, node, _) in &mut nodes {
         node.run_bootstrap(BootstrapTarget::All)
             .expect("install-order kick");

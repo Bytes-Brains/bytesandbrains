@@ -1,7 +1,7 @@
-//! IR well-formedness checkers run between compiler phases. Each
+//! IR well-formedness checkers run between compiler passes. Each
 //! function is a pure check returning `Result<(), VerifyError>`;
-//! the compiler runs them at the seam-points named in
-//! `docs/COMPILATION.md`.
+//! the compiler invokes them at the per-pass seams described in
+//! `docs/COMPILER.md`.
 
 use std::collections::HashSet;
 

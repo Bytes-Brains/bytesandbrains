@@ -1,17 +1,9 @@
-//! Compiler pass - pair every NodeProto carrying a `deadline_ns`
-//! attribute with an upstream `DeadlineCheck` syscall gate
-//! ( per the audit plan).
+//! Pair every NodeProto carrying a `deadline_ns` attribute with an
+//! upstream `DeadlineCheck` syscall gate. The check writes to a new
+//! sibling `<node>#__trigger_deadline` slot so the protected node
+//! fires only after both its original payload AND the deadline gate.
 //!
-//! The DSL records a `deadline_ns: i64` attribute on any op for
-//! which "if the deadline has passed before we get here, fail
-//! instead of running." This pass walks the partition graph,
-//! finds every such NodeProto, and inserts a `DeadlineCheck`
-//! upstream so the check fires before the protected op runs.
-//!
-//! Idempotent - re-running on an already-gated graph is a no-op.
-//! Joins the runner after `augment` in
-//! `bb-compiler/src/runner.rs` so the gates see the post-augmented
-//! graph and the augmented carriers see un-gated source nodes.
+//! Idempotent — re-running on an already-gated graph is a no-op.
 
 use crate::error::CompileError;
 use bb_ir::proto::onnx::{AttributeProto, GraphProto, NodeProto, StringStringEntryProto};
@@ -25,21 +17,17 @@ use bb_ir::syscall_ids::{
 pub const GATED_KEY: &str = "ai.bytesandbrains.deadline_gated";
 
 /// Suffix appended to a protected node's name to form the sibling
-/// trigger slot that the inserted `DeadlineCheck` writes (/// — closes `chief:B9 + S7`: the prior pass rewrote
-/// `node.input[0]`, destroying the payload on every `wire.Send`).
+/// trigger slot that the inserted `DeadlineCheck` writes.
 pub const TRIGGER_DEADLINE_SUFFIX: &str = "#__trigger_deadline";
 
 /// Insert a `DeadlineCheck` upstream of every `deadline_ns`-bearing
 /// node in `sub_graph`. Pure (the input graph is mutated in place
 /// but the function has no side effects beyond that).
 ///
-/// The `DeadlineCheck` writes to a NEW sibling input slot named
-/// `<protected>#__trigger_deadline`; the protected node's existing
-/// inputs (including `input[0]` payload on a `wire.Send`) stay
-/// intact. The engine fires the protected node only once every
-/// input — original payloads PLUS the new deadline-trigger slot —
-/// has been filled, which preserves the original gating semantics
-/// without destroying payload bytes.
+/// The `DeadlineCheck` writes to a sibling input slot
+/// `<protected>#__trigger_deadline`; the engine fires the protected
+/// node only after every input (original payloads plus the new
+/// trigger slot) has been filled.
 pub fn insert_async_deadlines(sub_graph: &mut GraphProto) -> Result<(), CompileError> {
     let mut gates: Vec<NodeProto> = Vec::new();
 
@@ -65,11 +53,8 @@ pub fn insert_async_deadlines(sub_graph: &mut GraphProto) -> Result<(), CompileE
             deadline_ns,
         ));
 
-        // Append the sibling deadline-trigger slot to the protected
-        // node's input list. Existing inputs (incl. input[0] payload
-        // on a `wire.Send`) stay untouched — the engine waits for
-        // both the original payload and the new trigger slot before
-        // firing.
+        // Append the sibling deadline-trigger slot; existing inputs
+        // stay untouched.
         node.input.push(trigger_slot);
         set_metadata(&mut node.metadata_props, GATED_KEY, "true");
     }
@@ -139,13 +124,10 @@ fn set_metadata(props: &mut Vec<StringStringEntryProto>, key: &str, value: &str)
 
 // ──── inventory-published GateContract ─────────────────
 
-/// Insertion contract for the deadline gate. Every node carrying a
-/// `deadline_ns` attribute must already have its sibling
-/// `__trigger_deadline` slot in `input` (the proof that
-/// `insert_async_deadlines` ran on it) and a matching
-/// `DeadlineCheck` upstream writing to that slot. The contract
-/// detects partial runs / missing gates that the prior
-/// presence-only validator silently accepted (closes `chief:S12`).
+/// Insertion contract for the deadline gate. Every node carrying
+/// `deadline_ns` must have the sibling `__trigger_deadline` input
+/// slot AND a matching `DeadlineCheck` writing to that slot —
+/// presence-only checks would miss partial runs.
 struct DeadlineCheckContract;
 
 impl crate::gate_contract::GateContract for DeadlineCheckContract {

@@ -1,9 +1,8 @@
-//! `validate_all_slots_bound` — Phase B of the chosen-path install
-//! migration. Walks the artifact's `BindingSpec` + IR + every
-//! bound concrete's `DEPENDENCIES`; surfaces a typed
+//! `validate_all_slots_bound` — surfaces a typed
 //! [`CompileError::UnboundSlot`] when the compiler hasn't been given
 //! enough information to construct every component the runtime
-//! needs.
+//! needs. Walks the artifact's `BindingSpec` + IR + every bound
+//! concrete's `DEPENDENCIES`.
 //!
 //! Three classes of unbound slot the pass catches:
 //!
@@ -38,11 +37,10 @@ use bb_ir::registry::find_concrete_component;
 use crate::artifact::BindingSpec;
 use crate::error::{CompileError, SlotSource};
 
-/// Stable PascalCase role names — used to map the recorder's
-/// `required_trait` metadata (e.g. `"BackendRuntime"`) back to the
-/// canonical Contract role identifier (`"Backend"`). The
-/// `<Role>Runtime` → `<Role>` strip mirrors the convention
-/// `resolve_component_dependencies::normalize_role` uses.
+/// Map the recorder's `required_trait` metadata
+/// (e.g. `"BackendRuntime"`) back to the canonical Contract role
+/// identifier (`"Backend"`) by stripping the `Runtime` suffix.
+/// Matches `resolve_component_dependencies::normalize_role`.
 fn canonical_role(required_trait: &str) -> &str {
     required_trait
         .strip_suffix("Runtime")
@@ -119,19 +117,16 @@ fn validate_direct_placeholders(
 
 /// Walk every bound concrete; for each declared dep, ensure
 /// `BindingSpec.slots` has an entry at `dep.slot` with the right
-/// role. Complements `resolve_component_dependencies` by surfacing
-/// the new `UnboundSlot { source: DependencyOf }` shape (the
-/// existing pass keeps emitting `UnboundDependency` for the
-/// migration window).
+/// role. Complements `resolve_component_dependencies`.
 fn validate_dependency_slots(spec: &BindingSpec) -> Result<(), CompileError> {
     for slot in &spec.slots {
         if slot.concrete_type_name.is_empty() {
             continue;
         }
         let Some(entry) = find_concrete_component(&slot.concrete_type_name) else {
-            // The earlier `validate_runtime_complete` pass surfaces
-            // unregistered concretes as `RuntimeIncomplete`; skip
-            // here so the dep pass remains a pure dep-graph check.
+            // `validate_runtime_complete` surfaces unregistered
+            // concretes; skip here so this pass stays a pure
+            // dep-graph check.
             continue;
         };
         for dep in entry.dependencies {

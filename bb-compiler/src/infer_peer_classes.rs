@@ -41,19 +41,14 @@ use bb_ir::peer_class::{
 use bb_ir::proto::onnx::{type_proto, GraphProto, StringStringEntryProto, TypeProto};
 
 /// Walk `graph.node` and stamp `HOME_CLASS_KEY` on each NodeProto.
-/// Pure per COMPILER.md §3.2.
+/// Pure.
 pub fn infer_peer_classes(graph: &mut GraphProto) -> Result<(), CompileError> {
-    // Phase B - stamp `peer_class` metadata on every graph input
-    // whose dataflow ultimately reaches a `wire.Send`'s peer slot.
-    // Replaces the recording-time pointer-identity autotag in
-    // `bb-dsl/src/graph.rs` (deleted alongside the single-arg
-    // `Graph::input(name)` migration). The trace walks backward
-    // from each `wire.Send`'s peer input through allow-listed
-    // pass-through ops (Identity, Slice, Gather, Concat, Squeeze,
-    // Unsqueeze) until it reaches a graph input or a non-pass-
-    // through producer. Graph inputs along that walk get the
-    // `peer_class = <input_name>` stamp; non-pass-through producers
-    // stop the trace.
+    // Compile-time peer-class trace: for every wire.Send peer
+    // input, walk backward through allow-listed pass-through ops
+    // (Identity, Slice, Gather, Concat, Squeeze, Unsqueeze). Graph
+    // inputs reached along that walk get the `peer_class =
+    // <input_name>` stamp; non-pass-through producers stop the
+    // trace (their own peer_class metadata, if any, drives routing).
     stamp_peer_class_on_inputs_feeding_wire_sends(graph);
 
     // value_name → home class.
@@ -116,18 +111,14 @@ pub fn infer_peer_classes(graph: &mut GraphProto) -> Result<(), CompileError> {
         let is_wire_send = node.domain == WIRE_DOMAIN && node.op_type == "Send";
         let is_wire_recv = node.domain == WIRE_DOMAIN && node.op_type == "Recv";
         if is_wire_send {
-            // wire.Send signature is `(payload_0, ..., payload_{N-1},
-            // peer)`. Per-DSL convention (bb-dsl/src/graph.rs:387-389)
-            // the peer is the LAST input and 1..N data payloads
-            // precede it. back-scan instead of the legacy
-            // hard-coded `input.get(1)` so multi-input wires
-            // (hierarchical FedAvg, GlobalRegistry Announce, gossip
-            // disseminate) infer the right destination class.
+            // wire.Send signature is (payload_0, ..., payload_{N-1}, peer):
+            // the peer is the LAST input, payloads precede it.
+            // Reading the last input lets multi-input wires (hierarchical
+            // FedAvg, GlobalRegistry Announce, gossip disseminate) infer
+            // the right destination class.
             //
-            // The destination class is whatever peer class produced
-            // the peer input; if the peer source has no class
-            // annotation we fall back to `@default` so naming
-            // downstream stays stable.
+            // Fallback to `@default` when the peer source carries no class
+            // annotation so naming downstream stays stable.
             let payload_name = node.input.first().cloned().unwrap_or_default();
             let peer_input = node.input.last().cloned().unwrap_or_default();
             let payload_home = home
@@ -145,21 +136,16 @@ pub fn infer_peer_classes(graph: &mut GraphProto) -> Result<(), CompileError> {
                 wire_id_to_dest_class.insert(wire_id, dest_class.clone());
             }
 
-            // For the new DSL shape Send.output == [handle]; for
-            // legacy hand-written shape it's [data, handle]. Treat
-            // either: classify the first output as dest_class when
-            // it's a `data`-shaped value, else as the sender's
-            // payload_home for a sender-side handle.
+            // Send output arity disambiguates the shape:
+            //   len==1 → [handle]; output[0] stays with the sender.
+            //   len>=2 → [data, handle]; output[0] is the data lifted
+            //            to dest_class (carried by the paired Recv on
+            //            the single-output variant).
             if let Some(first_out) = node.output.first() {
                 if !first_out.is_empty() {
                     let class = if node.output.len() >= 2 {
-                        // [data, handle] — output[0] is the data
-                        // lifted to dest_class (legacy).
                         dest_class.clone()
                     } else {
-                        // [handle] — output[0] stays with the sender
-                        // (new DSL). The paired Recv carries the
-                        // dest-side outputs.
                         payload_home.clone()
                     };
                     home.insert(first_out.clone(), class);
@@ -236,14 +222,11 @@ pub fn infer_peer_classes(graph: &mut GraphProto) -> Result<(), CompileError> {
 /// (the producing op's `peer_class` metadata, if any, drives the
 /// destination class downstream — no input-side stamp needed).
 ///
-/// This is the compile-time relocation of the recording-time
-/// pointer-identity autotag that previously fired in
-/// `Graph::input(name, &TYPE_PEER_ID)`. The trace lets a graph
-/// input flow through ops like `Identity`, `Slice`, `Gather`,
-/// `Squeeze`, `Unsqueeze`, or `Concat` before reaching a
-/// `wire.Send`'s peer slot — the common patterns when peer
-/// selection routes through structural ops (e.g. picking the first
-/// N peers of a view, or concatenating two peer subsets).
+/// Peer values commonly flow through structural ops (`Identity`,
+/// `Slice`, `Gather`, `Squeeze`, `Unsqueeze`, `Concat`) before
+/// reaching a `wire.Send`'s peer slot — picking the first N peers
+/// of a view or concatenating two peer subsets. The trace tolerates
+/// those so the graph-input source still gets stamped.
 fn stamp_peer_class_on_inputs_feeding_wire_sends(graph: &mut GraphProto) {
     let producers = build_producer_map(graph);
 
@@ -387,11 +370,9 @@ fn stamp_home(node: &mut bb_ir::proto::onnx::NodeProto, home: &str) {
 /// denotation, because the compiler doesn't have access to the
 /// `TypeNode` static after the graph crosses the recording boundary.
 ///
-/// accept both `"bb.peer_id"` (single peer recipient)
-/// and `"bb.peer_id_vec"` (broadcast multi-peer recipient)
-/// denotations. Closes the corrected design's S4 finding: the
-/// previous implementation only matched `bb.peer_id` and silently
-/// misclassified the broadcast peer-vec case.
+/// Accept both `bb.peer_id` (single recipient) and
+/// `bb.peer_id_vec` (broadcast multi-peer recipient) denotations
+/// so peer-vec values don't get misclassified as non-peer data.
 fn value_info_is_peer_id(vi: &bb_ir::proto::onnx::ValueInfoProto) -> bool {
     if vi.metadata_props.iter().any(|p| p.key == PEER_CLASS_KEY) {
         return true;

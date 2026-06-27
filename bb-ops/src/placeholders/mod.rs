@@ -50,11 +50,7 @@ impl BackendSlot {
             ..Default::default()
         });
         // Stamp value_info for each output so the type_solver sees a
-        // declared denotation at every recorder site. This is the
-        // recorder side of #20 (strict-types-by-default): with
-        // denotations stamped here, downstream passes treat the
-        // graph as fully typed without needing a `with_strict_types`
-        // toggle.
+        // declared denotation at every recorder site.
         for name in &output_names {
             g.declare_value_info(name, &TYPE_TENSOR_F32);
         }
@@ -834,8 +830,9 @@ impl IndexSlot {
 // ---------------------------------------------------------------
 
 /// Generic Aggregator slot placeholder. Bind a concrete
-/// `AggregatorRuntime` via `Node::with_aggregator(...)`. Exposes
-/// `Contribute` + `Aggregate` per `docs/IR_AND_DSL.md` §5c.2.
+/// `AggregatorRuntime` at compile time via
+/// `Compiler::new().bind_aggregator::<T>("slot")`. Exposes
+/// `Contribute` + `Aggregate`.
 ///
 /// Both ops carry an opaque metadata channel alongside the
 /// tensor: `Contribute` takes `(contribution, metadata)`;
@@ -926,9 +923,9 @@ impl CodecSlot {
     }
 
     /// `Encode(input) → output` — In → Out direction. Stamps
-    /// `ai.bytesandbrains.codec.port = "out"` on the NodeProto so the
-    /// refinement pass (Task 10) knows which port of the bound
-    /// concrete's `<In, Out>` to read for the output denotation.
+    /// `ai.bytesandbrains.codec.port = "out"` on the NodeProto so
+    /// the refinement pass knows which port of the bound concrete's
+    /// `<In, Out>` to read for the output denotation.
     pub fn encode(&self, g: &mut Graph, input: Output) -> Output {
         let slot_id = g.register_generic(self, "CodecRuntime");
         let out_name = g.next_site_name();

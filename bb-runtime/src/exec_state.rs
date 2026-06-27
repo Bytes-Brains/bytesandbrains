@@ -6,9 +6,9 @@
 //! invocation frames, and the monotonic ID allocator.
 //!
 //! `Engine` carries one `exec: ExecState` field rather than nine
-//! sibling fields. The architectural distinction matches the poll
-//! cycle's phases: Phase 2/6 drains `exec.frontier`; Phase 5 matches
-//! `exec.pending_completions` against `exec.pending_async`.
+//! sibling fields. The architectural grouping matches the poll
+//! cycle: frontier drains seed downstream ops while completions
+//! match against parked async suspensions.
 //!
 //! The timer scheduler and inbound-envelope context map live on
 //! [`crate::framework::FrameworkComponents`] alongside the other
@@ -51,11 +51,11 @@ pub struct ExecState {
     /// Per-execution liveness tracker (output counter used for GC
     /// bookkeeping when an execution finishes).
     pub execution_state: HashMap<ExecId, ExecutionState>,
-    /// Suspended ops awaiting `CommandId` completion. Phase 5 drains
-    /// matches against `pending_completions`.
+    /// Suspended ops awaiting `CommandId` completion. Matched
+    /// against `pending_completions` on the engine's completion drain.
     pub pending_async: HashMap<CommandId, PendingAsync>,
-    /// Completions captured during a dispatch hook. Drained by
-    /// Phase 5 and matched against `pending_async`.
+    /// Completions captured during a dispatch hook. Drained by the
+    /// engine and matched against `pending_async`.
     pub pending_completions: Vec<PendingCompletion>,
     /// Active function-call invocations keyed by the body's
     /// `ExecId`. Populated when `OpDispatch::FunctionCall` fires;

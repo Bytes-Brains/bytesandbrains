@@ -112,11 +112,10 @@ pub fn validate_runtime_complete(sub_graph: &GraphProto) -> Result<(), CompileEr
         });
     }
 
-    // every gate-insertion pass publishes a
-    // `GateContract` via inventory; iterate them so that adding a
-    // new gate is "ship the inserting pass + register its
-    // contract" rather than "edit `validate_runtime_complete`"
-    // (closes `chief:S12`). Failures surface as
+    // Each gate-insertion pass publishes a `GateContract` via
+    // inventory; iterating them means adding a new gate is "ship
+    // the inserting pass + register its contract" without editing
+    // this validator. Failures surface as
     // `CompileError::RuntimeIncomplete { missing }`.
     for reg in crate::gate_contract::contracts() {
         reg.contract.assert_inserted(sub_graph)?;

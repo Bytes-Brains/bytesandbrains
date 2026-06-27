@@ -233,7 +233,7 @@ pub use bb_runtime::engine::{EngineStats, EngineStep};
 pub use bb_runtime::ingress::{IngressEvent, IngressQueue, IngressQueueRef};
 pub use bb_runtime::node::{BootstrapTarget, Node, NodeConfig};
 
-// T8 compile + install entry points.
+// Compile + install entry points.
 pub mod install;
 pub use bb_compiler::Compiler;
 pub use install::{install, Config, InstallError};

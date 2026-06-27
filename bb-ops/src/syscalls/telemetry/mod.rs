@@ -1,9 +1,8 @@
 //! App-emit + telemetry ops - AppEmit, AppNotify, Record,
-//! IncrMetric. //!
-//! Spec: Sub-C in `docs/IR_AND_DSL.md` §5a.
+//! IncrMetric.
 //!
 //! `AppEmit` / `AppNotify` push onto `ctx.syscall.pending_app_events`;
-//! the Engine's Phase 8 drains them into `EngineStep::AppEvent`.
+//! the Engine drains them into `EngineStep::AppEvent`.
 //! `Record` writes to `ctx.syscall.record_buffer`; `IncrMetric` bumps
 //! `ctx.syscall.counters`.
 

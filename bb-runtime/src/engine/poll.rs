@@ -1,9 +1,5 @@
 //! 8-phase poll cycle + `handle_completion` per `docs/ENGINE.md`
 //! §7 + §9.
-//!
-//! /10: wires `invoke_one` into the
-//! canonical 8-phase cycle. Phases 1, 2, 5, 6, 8 are active at
-//! ; Phases 3, 4, 7 are no-op pass-throughs (filled in by
 use crate::engine::core::Engine;
 use crate::engine::step::EngineStep;
 use crate::framework::scheduler::TimerKind;
@@ -150,8 +146,7 @@ impl Engine {
         steps
     }
 
-    /// 8-phase poll cycle per ENGINE.md §7 +
-    /// `docs/internal/IMPLEMENTATION_PLAN.md` .
+    /// 8-phase poll cycle per ENGINE.md §7.
     pub fn poll(&mut self) -> Vec<EngineStep> {
         let _poll_span = tracing::debug_span!("engine.poll").entered();
         // GC executions that finished in the previous cycle. The
@@ -185,7 +180,6 @@ impl Engine {
         // detect a partial drain (queue not yet empty, async pending).
         let mut bootstrap_phases_completed: usize = 0;
 
-        // --- Phase 1 - drain ingress -----------------------------
         // While bootstrap is pending the ingress drain consumes only
         // events that can advance the bootstrap call (its async
         // completions, transport failures). Body-side events
@@ -195,13 +189,9 @@ impl Engine {
         // when bootstrap completes mid-pass so body events queued
         // before bootstrap finished still process in this cycle.
         //
-        // Backpressure detection per
-        // `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-        // §6(a): the pre-drain depth is the receiver's signal for
-        // "we are over the high-water mark"; snapshotting it here
-        // lets the per-envelope handler attribute overload to each
-        // contributing sender without re-reading the queue (which
-        // would already be drained to zero).
+        // Snapshot the pre-drain depth so per-envelope handlers see
+        // the receiver's overload signal even after the drain runs the
+        // queue to zero.
         self.phase1_pre_drain_depth = self.ingress.len();
         {
             let _phase1 = tracing::debug_span!("engine.phase1_ingress").entered();
@@ -228,7 +218,6 @@ impl Engine {
             }
         }
 
-        // --- Phase 2 - drain frontier (initial pass) -------------
         {
             let _phase2 = tracing::debug_span!("engine.phase2_frontier_drain").entered();
             loop {
@@ -259,7 +248,6 @@ impl Engine {
             }
         }
 
-        // --- Phase 3 - route bus events to subscribed sites ------
         // Before draining, surface any FIFO drops accumulated since
         // the last poll as an `InfraEvent::BusOverflow`. Publishing
         // before drain keeps the event in this cycle's routing pass.
@@ -301,14 +289,12 @@ impl Engine {
             }
         }
 
-        // --- Phase 4 - poll matured timers -----------------------
         let now_ns = self.framework.scheduler.now_ns();
         let matured = self.framework.scheduler.poll_matured(now_ns);
         for kind in matured {
             self.handle_matured_timer(kind);
         }
 
-        // --- Phase 5 - expire deadlines + drain pending_completions -
         // Engine-side deadline scan runs first so an expired
         // suspension fails this cycle even if a (now-stale)
         // completion is also queued.
@@ -325,7 +311,6 @@ impl Engine {
             }
         }
 
-        // --- Phase 5b - φ-accrual liveness scan ------------------
         // tracker entry and publish bus events on state changes.
         {
             let now_ns = self.framework.scheduler.now_ns();
@@ -346,7 +331,6 @@ impl Engine {
             }
         }
 
-        // --- Phase 6 - final frontier drain (cascades) -----------
         if !budget_exceeded {
             loop {
                 while let Some((op_ref, exec_id)) = self.pop_frontier_fireable() {
@@ -372,7 +356,6 @@ impl Engine {
             }
         }
 
-        // --- Phase 7 - fire_lifecycle ----------------------------
         // For each phase queued by the host via
         // `Engine::fire_lifecycle(phase)`, push every enrolled
         // `LifecyclePhase` op onto the frontier with a fresh ExecId
@@ -418,7 +401,6 @@ impl Engine {
             }
         }
 
-        // --- Phase 8 - drain outbound queue + pending app events -
         let _phase8 = tracing::debug_span!("engine.phase8_outbound").entered();
         for env in self.framework.outbound_queue.drain_all() {
             steps.push(EngineStep::SendEnvelope(env));
@@ -465,10 +447,9 @@ impl Engine {
                 steps.push(EngineStep::WaitingOnBootstrap);
             }
         }
-        // Drain Sub-C syscall outputs (AppEmit / AppNotify) into
-        // EngineStep::AppEvent observable by the host. `Emit` carries
-        // serialized payload bytes; `Notify` is a marker-only event
-        // (empty `value_bytes`).
+        // Drain AppEmit / AppNotify syscall outputs into
+        // EngineStep::AppEvent. `Emit` carries serialized payload
+        // bytes; `Notify` is a marker-only event (empty `value_bytes`).
         for ev in std::mem::take(&mut self.framework.pending_app_events) {
             let (module_name, topic, value_bytes) = match ev {
                 crate::bus::AppEvent::Emit { name, value_bytes } => {
@@ -532,17 +513,10 @@ impl Engine {
                 envelope,
                 src_observed_address,
             } => {
-                // Backpressure protocol pre-flight per
-                // `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-                // §3 + §6. The receiver:
-                //   1. Drops the envelope without dispatch when the
-                //      sender is in silent-drop mode (the K-then-silent
-                //      fallback).
-                //   2. Otherwise routes the envelope normally, then
-                //      checks the post-pop ingress depth against the
-                //      configured high-water mark and emits one
-                //      `BackoffNotice` to the sender when the mark is
-                //      crossed.
+                // Backpressure pre-flight: silent-drop senders bypass
+                // dispatch; others route normally and then check the
+                // post-pop ingress depth against the high-water mark
+                // to emit a single BackoffNotice.
                 if self
                     .framework
                     .peer_state
@@ -558,10 +532,9 @@ impl Engine {
                 // cannot know.
                 //
                 // The address-book hint is best-effort under allocator
-                // pressure (spec §2.1 S4 + S5): if the dedup buffer
-                // cannot be reserved we drop the hint, emit
-                // `WireReceiveError::AllocationFailed`, and continue
-                // routing — the envelope's fills do not depend on the
+                // pressure: if the dedup buffer cannot be reserved we
+                // drop the hint, emit `WireReceiveError::AllocationFailed`,
+                // and continue routing — fills do not depend on the
                 // address book.
                 let mut steps = Vec::new();
                 if let Err(alloc) =
@@ -610,12 +583,10 @@ impl Engine {
                 out
             }
             IngressEvent::CompletionFailed { cmd_id, detail } => {
-                // async completion FAILURE; routes
-                // directly to `handle_completion_failed` (already
-                // at this file's lines 67-80) which fails the
-                // parked op through the typed `OpFailed` path,
-                // NOT through the success-bytes masquerade the
-                // legacy `CompletionSink::fail` was forced to use.
+                // Async-completion FAILURE: route to the typed
+                // OpFailed path via handle_completion_failed so the
+                // parked op fails as itself rather than as a
+                // success-bytes payload.
                 self.handle_completion_failed(
                     cmd_id,
                     crate::bus::OpError {
@@ -629,17 +600,11 @@ impl Engine {
                 peer: _peer,
                 reason: _reason,
             } => {
-                // transport-side delivery failure.
-                // Consumes the in-flight registration so the
-                // request tracker doesn't leak the entry. The
-                // parked originator op's failure routing is the
-                // wire-timeout drain's job (`drain_stale`); this
-                // variant exists so the request tracker observes
-                // an explicit transport failure rather than waiting
-                // for the TTL to elapse. Wider parked-op routing
-                // (peeking the original `InFlightSend.parked_op`
-                // through a typed accessor) is a follow-up
-                // alongside the snapshot fidelity work in Phase 11.
+                // Transport-side delivery failure. Consumes the
+                // in-flight registration so the request tracker doesn't
+                // leak the entry; the parked originator op's failure is
+                // surfaced by the wire-timeout drain (`drain_stale`)
+                // rather than waiting for the TTL to elapse.
                 let now_ns = self.framework.scheduler.now_ns();
                 let _ = self
                     .framework
@@ -747,9 +712,8 @@ impl Engine {
         env: crate::envelope::WireEnvelope,
         src_peer: Option<crate::ids::PeerId>,
     ) -> Vec<EngineStep> {
-        // Sender-side back-pressure ingest per
-        // `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-        // §5. Inbound envelopes whose first fill carries the reserved
+        // Sender-side back-pressure ingest. Inbound envelopes whose
+        // first fill carries the reserved
         // `BackoffNoticePayload` type-hash are framework-internal -
         // intercept them here, decode the payload, advise the
         // sender-side `BackoffTable`, and short-circuit the normal
@@ -1508,15 +1472,13 @@ impl Engine {
         let _ = self.framework.address_book.add_peer(src_peer, vec![addr]);
     }
 
-    /// Sender-side ingest of a `BackoffNotice` envelope per
-    /// `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-    /// §5. Called from `route_envelope` when the first fill's
-    /// `type_hash` matches `backoff_notice_type_hash`. Decodes the
-    /// payload, applies the remote-advised back-off via
-    /// `BackoffTable::record_remote_advisory`, records the matching
-    /// `PeerGovernor::record_failure` so the existing 5-failure
-    /// `LifecycleTransition::WentDown` path stays the single peer-
-    /// down decision site, and returns no `EngineStep`s - the notice
+    /// Sender-side ingest of a `BackoffNotice` envelope. Called from
+    /// `route_envelope` when the first fill's `type_hash` matches
+    /// `backoff_notice_type_hash`. Decodes the payload, applies the
+    /// remote-advised back-off via `BackoffTable::record_remote_advisory`,
+    /// and records a `PeerGovernor::record_failure` so the existing
+    /// 5-failure `LifecycleTransition::WentDown` path stays the single
+    /// peer-down decision site. Returns no `EngineStep`s — the notice
     /// never reaches a user Component.
     ///
     /// When the source peer is unknown (the inbound `EnvelopeFrom`
@@ -1578,9 +1540,8 @@ impl Engine {
         Vec::new()
     }
 
-    /// Receiver-side back-pressure hook per
-    /// `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-    /// §6. When the ingress depth crosses the high-water mark (or
+    /// Receiver-side back-pressure hook. When the ingress depth
+    /// crosses the high-water mark (or
     /// the caller forces emission via `force = true` from the
     /// φ-accrual scan), consult the `BackpressureTracker` for the
     /// `src_peer` and - on `Decision::EmitNotice` - mint a
@@ -1601,12 +1562,12 @@ impl Engine {
         // by an external signal (φ flip / Component reject).
         let force = !matches!(cause, crate::framework::BackoffCause::QueueFull);
         if !force {
-            // Compare the pre-drain snapshot captured at Phase 1
-            // entry to the configured high-water fraction of
-            // ingress capacity. The snapshot stays valid across
-            // every `process_ingress_event` call inside the same
-            // poll cycle - using the current `ingress.len()` would
-            // see post-drain zero and never trip.
+            // Compare the pre-drain ingress-depth snapshot to the
+            // configured high-water fraction of capacity. The
+            // snapshot stays valid across every
+            // `process_ingress_event` call inside the same poll
+            // cycle — using the current `ingress.len()` would see
+            // post-drain zero and never trip.
             let len = self.phase1_pre_drain_depth;
             let cap = self.ingress.capacity();
             if !self
@@ -1623,7 +1584,7 @@ impl Engine {
         // `hint_ns` for QueueFull is sized by the configured
         // min-notice interval (the BackpressureTracker enforces the
         // floor). PhiAccrual callers may pass a specific mean
-        // inter-arrival hint per §6(b); ExplicitDrop callers pass the
+        // inter-arrival hint; ExplicitDrop callers pass the
         // Component-supplied `BackpressureHint`.
         let min_hint = hint_ns.unwrap_or(0);
         let decision = self

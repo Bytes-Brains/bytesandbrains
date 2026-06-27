@@ -43,10 +43,10 @@ cpu-backend     = ["dep:ndarray"]
 test-components = []
 
 [dependencies]
-bb-ir       = { path = "../bb-ir", version = "0.3.4" }
-bb-dsl      = { path = "../bb-dsl", version = "0.3.4" }
-bb-runtime  = { path = "../bb-runtime", version = "0.3.4", default-features = false }
-bb-derive   = { path = "../bb-derive", version = "0.3.4" }
+bb-ir       = { path = "../bb-ir", version = "0.3.5" }
+bb-dsl      = { path = "../bb-dsl", version = "0.3.5" }
+bb-runtime  = { path = "../bb-runtime", version = "0.3.5", default-features = false }
+bb-derive   = { path = "../bb-derive", version = "0.3.5" }
 prost       = { workspace = true }
 tracing     = { workspace = true }
 serde       = { workspace = true }

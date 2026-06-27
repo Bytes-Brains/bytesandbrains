@@ -1,17 +1,7 @@
 //! Engine bootstrap state — consolidated owner of every bootstrap
 //! field the engine reads during install + poll.
 //!
-//! Replaces the scattered `Engine::bootstrap_*` fields
-//! (`bootstrap_function_keys`, `bootstrap_next_idx`,
-//! `bootstrap_pending`, `bootstrap_exec_id`). Every read + write goes
-//! through `BootstrapState` so the host-driven bootstrap redesign
-//! (per
-//! `docs/internal/superpowers/specs/2026-06-25-host-driven-bootstrap.md`)
-//! can extend the surface with per-target input staging,
-//! Component-level bootstraps, and a pending-request queue without
-//! re-threading shape changes through call sites.
-//!
-//! Host-driven (F4): install records targets on `install_order` +
+//! Host-driven: install records targets on `install_order` +
 //! `module_bootstraps` but leaves `pending` disarmed. The host arms
 //! the queue via [`crate::node::Node::run_bootstrap`] (which calls
 //! [`Self::arm_install_order`] + `Engine::seed_bootstrap_call`) or
@@ -33,11 +23,8 @@
 //!   host-driven driver can pre-acquire bound components without
 //!   re-walking the program at run time.
 //! - `component_bootstraps` — per-slot Component bootstrap registry.
-//!   Empty today; F5 populates when Component bootstrap registration
-//!   lands.
 //! - `pending_requests` — host-supplied `BootstrapRequest`s awaiting
-//!   validation + staging. Empty today; F3 populates from
-//!   `Node::run_bootstrap` (`BootstrapTarget::ModuleRequests`).
+//!   validation + staging.
 //! - `in_flight` — currently executing bootstraps (Module or
 //!   Component). Today at most one entry — the currently seeded
 //!   module bootstrap. The Vec shape readies the host-driven path

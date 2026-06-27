@@ -57,29 +57,16 @@ pub const SYNTHESIZED_FROM_KEY: &str = "ai.bytesandbrains.synthesized_from_send"
 /// of the class; the Recv receives envelopes from other instances.
 /// Both paths share the one installed graph.
 ///
-/// Pure per ANALYSIS.md §3.2 - no IO, no global state.
+/// Pure: no IO, no global state.
 pub fn synthesize_wire_recvs(graph: &mut GraphProto) -> Result<usize, CompileError> {
-    // two-phase refactor.
-    //
-    // Phase 1 (collect): walk every `wire.Send`, identify its
-    // cross-partition consumers, and collect ALL planned rewrites
-    // into a SINGLE accumulating map keyed by `(consumer_idx,
-    // matched_input_name)`. Each map entry stores the
-    // `Vec<RewriteOp>` of every Send that wants to rewrite that
-    // particular consumer-input slot — N-fanin (one consumer fed
-    // by N Sends) keeps ALL N rewrites instead of letting later
-    // Sends collide with earlier ones via per-Send rewrite maps.
-    // Closes `chief:B8`.
-    //
-    // Phase 2 (materialize): replay every rewrite against a fresh
-    // clone of the original `graph.node` so the final node list
-    // carries every consumer's full rewritten input list.
+    // N-fanin correctness: distinct Sends may stage rewrites for
+    // the same consumer; collecting every (consumer_idx, input_name)
+    // rewrite into one accumulating map and replaying against a
+    // fresh clone of the original node list prevents earlier
+    // rewrites from being clobbered by later ones.
 
     let snapshot: Vec<NodeProto> = graph.node.clone();
     let mut sentinels: BTreeMap<usize, String> = BTreeMap::new();
-    // Phase 1 accumulates Recvs directly keyed by send_idx so Phase 2
-    // can interleave them without re-parsing the SYNTHESIZED_FROM_KEY
-    // metadata value (which now stores a value NAME, not a node index).
     let mut recvs_by_send: BTreeMap<usize, Vec<NodeProto>> = BTreeMap::new();
     let mut rewrites: BTreeMap<(usize, String), String> = BTreeMap::new();
     let mut next_seqno: usize = 0;
@@ -137,12 +124,9 @@ pub fn synthesize_wire_recvs(graph: &mut GraphProto) -> Result<usize, CompileErr
 
         for (class, consumer_indices) in by_class {
             let minted = format!("{data_name}__recv_{}", next_seqno);
-            // synthesized Recv emits the canonical
-            // `[payload, sender]` output shape so
-            // `installed_graph::recv_sender_sites` pairs the two
-            // sites for inbound envelope delivery (the engine
-            // already expects this layout — closes the spec-vs-
-            // code gap).
+            // Recv emits [payload, sender]; the engine's
+            // installed_graph::recv_sender_sites pairs the two
+            // sites for inbound envelope delivery.
             let minted_sender = format!("{data_name}__recv_{}__sender", next_seqno);
             next_seqno += 1;
             synthesized += 1;
@@ -164,15 +148,10 @@ pub fn synthesize_wire_recvs(graph: &mut GraphProto) -> Result<usize, CompileErr
                     },
                     StringStringEntryProto {
                         key: SYNTHESIZED_FROM_KEY.into(),
-                        // Store the Send's original first-output VALUE NAME
-                        // (not the node index) so that
-                        // `check_wire_edge_types` can look it up via
-                        // `TypeSolution::type_of`, which is keyed by value
-                        // name. The TypeSolution is built before
-                        // `synthesize_wire_recvs` runs, so it records the
-                        // pre-sentinel `data_name`. Phase-2 ordering uses
-                        // `recvs_by_send` (built during Phase 1 by index)
-                        // and no longer parses this field as a usize.
+                        // Store the Send's original first-output
+                        // value name so check_wire_edge_types can
+                        // look it up via TypeSolution::type_of
+                        // (which is keyed by value name).
                         value: data_name.clone(),
                     },
                 ],
@@ -194,13 +173,11 @@ pub fn synthesize_wire_recvs(graph: &mut GraphProto) -> Result<usize, CompileErr
         }
     }
 
-    // emit the rewritten node list in topological order:
-    // each original node (rewritten if it's a Send or a consumer)
-    // is emitted, and synthesized Recvs are interleaved immediately
-    // after the Send that produced them so the partitioner's
-    // BFS sees `Send → Recv → consumer` order.
-    // `recvs_by_send` was built during Phase 1 (keyed by send_idx),
-    // so no re-parsing of SYNTHESIZED_FROM_KEY is needed here.
+    // Emit the rewritten node list in topological order: each
+    // original node (rewritten if it's a Send or a consumer) is
+    // emitted, and synthesized Recvs are interleaved immediately
+    // after the Send that produced them so the partitioner's BFS
+    // sees `Send → Recv → consumer` order.
 
     let mut emitted: Vec<NodeProto> = Vec::with_capacity(snapshot.len() + synthesized);
     for (idx, n) in snapshot.iter().enumerate() {

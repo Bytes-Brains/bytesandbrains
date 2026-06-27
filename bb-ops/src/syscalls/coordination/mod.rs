@@ -1,15 +1,9 @@
 //! Coordination ops - Limit, Any, Gate, Serialize, CorrelateTag,
 //! Hold, DeadlineCheck. + .
 //!
-//! Spec: Sub-B in `docs/IR_AND_DSL.md` §5a.
-//!
-//! The original 9 ops (Limit/Any/Gate/Serialize/CorrelateTag/Hold)
-//! live inline in this file because each body is small and follows
-//! the same template. `DeadlineCheck` lives in its own
-//! sub-module because it's compiler-inserted  and the
-//! compiler pass needs to reference its `OP_TYPE` + attribute name
-//! constants - keeping them in their own module gives a clean
-//! re-export surface.
+//! `DeadlineCheck` lives in its own sub-module so the compiler
+//! pass that inserts it can re-export `OP_TYPE` + attribute-name
+//! constants from one place.
 
 pub mod deadline_check;
 
@@ -113,9 +107,8 @@ pub fn invoke_any(
         .find(|a| a.name == "group")
         .map(|a| String::from_utf8_lossy(&a.s).into_owned())
         .unwrap_or_default();
-    // Empty group attribute → degrade to legacy "always fire" mode
-    // for tests that don't supply a `group` attr. Non-empty: gate
-    // on the latch.
+    // Empty `group` → always fire (no latch). Non-empty → gate on
+    // the per-group latch so a group fires at most once per Node.
     if !group.is_empty() && !ctx.syscall.any_fired_groups.insert(group) {
         // Already fired this group - absorb.
         return Ok(DispatchResult::Immediate(vec![]));

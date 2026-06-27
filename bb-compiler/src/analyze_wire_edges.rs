@@ -1,6 +1,6 @@
-//! Pass 6 - `analyze_wire_edges`. Classify each cross-Node edge as
-//! `data` or `trigger_only` and group sends in the same cycle scope
-//! for batching
+//! `analyze_wire_edges` — classify each cross-Node edge as `data`
+//! or `trigger_only` and group sends in the same cycle scope for
+//! batching.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,8 +16,7 @@ pub use bb_ir::keys::{
     TRIGGER_DENOTATION, WIRE_TRANSPORT_KEY,
 };
 
-/// Per-edge classification + per-cycle batching. Pure per
-/// ANALYSIS.md §3.2.
+/// Per-edge classification + per-cycle batching. Pure.
 ///
 /// Writes the classification metadata directly onto the matching
 /// `sub_graph.node` NodeProtos (Send + Recv pairs). The
@@ -48,7 +47,7 @@ pub fn analyze_wire_edges(
     let mut batch_groups: BTreeMap<(String, String), u32> = BTreeMap::new();
     let mut next_batch_id: u32 = 0;
 
-    // Per ANALYSIS.md §9.1, the classification rule is: if EVERY
+    // Classification rule: if EVERY
     // downstream consumer's input-port type is `bb.trigger`, mark
     // the edge `trigger_only`; otherwise `data`. We walk the
     // sub-graph's nodes to find each consumer of the edge value,

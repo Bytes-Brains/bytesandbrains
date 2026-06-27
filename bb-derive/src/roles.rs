@@ -3,7 +3,7 @@
 //! Each role derive emits the universal triple (`ConcreteComponent` +
 //! `AnyComponent` + `inventory::submit!`) plus a `<Role>Runtime` impl
 //! whose opset names one `AtomicOpDecl` per Contract method (PascalCase).
-//! Bridge plan: `docs/CONTRACT_DISPATCH.md`.
+//! See `docs/CONTRACT_DISPATCH.md` for the Contract ↔ Runtime bridge design.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -717,7 +717,7 @@ fn emit_aggregator_arms() -> Vec<TokenStream> {
                 };
                 // Missing src_peer → typed OpError. Fabricating
                 // PeerId(0) misattributes contributions and breaks
-                // dedup-by-src (security hole; theme T5).
+                // dedup-by-src (security hole).
                 let src = match _ctx.current.inbound.src_peer {
                     ::std::option::Option::Some(p) => p,
                     ::std::option::Option::None => {
@@ -975,7 +975,7 @@ fn emit_data_source_arms() -> Vec<TokenStream> {
 fn emit_codec_arms() -> Vec<TokenStream> {
     // Hardcoded Int8/zstd shape: train Vec<Box<[f32]>>, encode
     // Box<[f32]> → Box<[u8]>, decode Box<[u8]> → Box<[f32]>.
-    // Polymorphic Self::In/Self::Out threading is deferred (Task 8).
+    // Polymorphic Self::In/Self::Out threading is not yet implemented.
     vec![
         quote! {
             "Train" => {

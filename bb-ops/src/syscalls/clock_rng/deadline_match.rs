@@ -1,5 +1,5 @@
 //! `DeadlineMatch` syscall - first-arrival selector between a
-//! `then` trigger and a `timeout` trigger. Sub-F.
+//! `then` trigger and a `timeout` trigger.
 
 use bb_ir::proto::onnx::NodeProto;
 use bb_runtime::atomic::DispatchResult;

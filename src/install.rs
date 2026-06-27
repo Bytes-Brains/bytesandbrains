@@ -231,9 +231,9 @@ impl std::error::Error for InstallError {}
 /// names target functions; the compiler's content-hash suffix
 /// (`<target>#<hash>`) is matched after exact-name. Bootstrap
 /// functions are recorded in slice order on
-/// `bootstrap_function_keys` but install no longer auto-fires —
-/// the host calls [`Node::run_bootstrap`] to drive each target
-/// serially before the body phase observes the first poll.
+/// `bootstrap_function_keys`; the host calls
+/// [`Node::run_bootstrap`] to drive each target serially before
+/// the body phase observes the first poll.
 pub fn install(
     peer_id: PeerId,
     addresses: Vec<Address>,
@@ -450,8 +450,8 @@ fn register_dispatchers_for(
     }
     // Bootstrap dispatcher — the `#[derive(bb::Concrete)]` derive
     // emits one `BootstrapDispatcherRegistration` per concrete so
-    // every registered component participates in the F3/F5 Component
-    // bootstrap path without the install caller naming the type.
+    // every registered component participates in component
+    // bootstrap without the install caller naming the type.
     // Idempotent under the `bootstrap` pseudo-role key so cascade
     // re-registration of the same concrete (multi-target installs)
     // does not double-register.

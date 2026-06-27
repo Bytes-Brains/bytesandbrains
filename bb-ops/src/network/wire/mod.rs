@@ -53,11 +53,10 @@ pub fn invoke(
     invoke_send(inputs, ctx)
 }
 
-/// Encode a single slot value to its wire bytes, surfacing failures
-/// as a typed `OpError::ExecutionFailed` carrying the slot name +
-/// the underlying error. Replaces the previous `.expect()` panic
-/// path so a malformed payload drops the op instead of crashing the
-/// node.
+/// Encode a single slot value to its wire bytes. Surfaces encode
+/// failures as `OpError::ExecutionFailed` carrying the slot name
+/// and the underlying error, so a malformed payload drops the op
+/// instead of crashing the node.
 fn encode_or_error(name: &str, value: &dyn SlotValue) -> Result<Vec<u8>, OpError> {
     value.to_wire_bytes().map_err(|e| OpError {
         kind: bb_runtime::bus::OpErrorKind::ExecutionFailed,
@@ -275,8 +274,7 @@ fn read_attribute_u64(attrs: &[bb_ir::proto::onnx::AttributeProto], name: &str) 
 /// Map a `PeerId` onto a `NodeSiteId` for RTT tracker indexing.
 /// Hashes the full multihash digest with FNV-1a so two peers whose
 /// multihashes share a leading 8-byte prefix don't collide into the
-/// same RTT slot (replaces the prior leading-8-bytes
-/// truncation). Production deployments that distinguish multiple
+/// same RTT slot. Production deployments that distinguish multiple
 /// logical sites per physical peer (e.g. fast ping handler vs GPU
 /// compute handler on the same address) can swap this for an
 /// explicit `NodeSiteId` carried in the envelope.
@@ -294,16 +292,12 @@ fn peer_to_site(peer: bb_runtime::ids::PeerId) -> bb_runtime::ids::NodeSiteId {
 ///
 /// Pull the destination peer list from a Send op's inputs.
 ///
-/// M10 makes this VEC-ONLY: the position-1 input must resolve to a
-/// `PeerIdVecValue`. The legacy `PeerIdValue` singleton fallback
-/// is gone. Samplers + broadcast components always emit a vector;
-/// a single-peer send wraps `[peer]` itself. This shifts a class
-/// of cardinality-mismatch bugs (silent wrap into `vec![p]`) into
-/// a typed authoring requirement.
-///
-/// Returns an empty `Vec` when no peer input resolves — composes
-/// naturally with samplers that returned no peers this round
-/// (the wire fires no envelopes; the local DAG continues).
+/// Vec-only: the position-1 input must resolve to a
+/// `PeerIdVecValue`. Samplers + broadcast components always emit
+/// a vector; a single-peer send wraps `[peer]` itself. Returns
+/// an empty `Vec` when no peer input resolves — composes
+/// naturally with samplers that returned no peers this round (the
+/// wire fires no envelopes; the local DAG continues).
 pub(crate) fn extract_dest_peers(
     inputs: &[(&str, &dyn SlotValue)],
     _ctx: &RuntimeResourceRef<'_>,
@@ -312,9 +306,7 @@ pub(crate) fn extract_dest_peers(
     // `BytesValue` fallback handles `IngressEvent::Invoke` /
     // `AppEvent` hosts that ship pre-encoded peer-vec bytes — the
     // engine wraps those into a `BytesValue` carrier without per-
-    // slot `type_hash` plumbing yet. F3 (full type-hash gating of
-    // the bytes path) lands once the engine threads the slot's
-    // expected `type_hash` through `IngressEvent::Invoke`.
+    // slot `type_hash` plumbing on those ingress paths.
     let try_decode = |h: &dyn SlotValue| -> Option<Vec<bb_runtime::ids::PeerId>> {
         if let Some(p) = h.as_any().downcast_ref::<PeerIdVecValue>() {
             return Some(p.0.clone());
@@ -356,10 +348,9 @@ const DEST_SUFFIX_ATTR_PREFIX: &str = "ai.bytesandbrains.dest_suffix.";
 /// Attribute prefix the compiler's `analyze_wire_edges` pass stamps
 /// when it has classified a per-input edge as trigger-only (the
 /// downstream Recv consumer reads only the firing signal, not the
-/// payload bytes). Used in priority over the legacy
-/// `payload.is_empty()` heuristic — a compiler-attested
-/// classification is authoritative even when the value happens to
-/// encode to zero bytes (hardening of S10).
+/// payload bytes). Takes priority over the `payload.is_empty()`
+/// heuristic — a compiler-attested classification is authoritative
+/// even when the value happens to encode to zero bytes.
 const TRIGGER_ONLY_ATTR_PREFIX: &str = "ai.bytesandbrains.trigger_only.";
 
 /// Collect every value input (anything not `dest*` or `req_id`) into
@@ -374,7 +365,7 @@ const TRIGGER_ONLY_ATTR_PREFIX: &str = "ai.bytesandbrains.trigger_only.";
 ///
 /// `SlotFill.type_hash` is stamped from the producer-side
 /// `SlotValue::type_hash()` so the receiver dispatches by type
-/// instead of seeing the always-0 default (closes S10).
+/// instead of seeing the always-0 default.
 /// `SlotFill.trigger_only` resolves first to the compiler-stamped
 /// per-input attribute (`ai.bytesandbrains.trigger_only.<name>`),
 /// then falls back to the `payload.is_empty()` heuristic.

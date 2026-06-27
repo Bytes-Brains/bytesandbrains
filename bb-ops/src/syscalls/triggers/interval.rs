@@ -1,8 +1,8 @@
 //! `Interval` syscall - periodic Trigger source.
 //!
 //! Reads `period_ns` attribute, schedules a `TimerKind::Interval`
-//! on `ctx.time.scheduler`. Returns immediate Trigger output; the Phase
-//! 4 timer maturity loop re-arms the next firing.
+//! on `ctx.time.scheduler`. Returns immediate Trigger output; the
+//! engine's scheduler maturity drain re-arms the next firing.
 
 use bb_ir::proto::onnx::NodeProto;
 use bb_runtime::atomic::DispatchResult;

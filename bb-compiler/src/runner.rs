@@ -89,11 +89,10 @@ pub(crate) fn run_pipeline_with_options(
         })?;
     let root_name = root.name.clone();
 
-    // Bootstrap-as-function: validate the bootstrap composition tree
-    // before partitioning starts. Runs against the full top-level model
-    // view (where the `<root>__bootstrap` FunctionProto + every child
-    // bootstrap still live in `temp.functions`); per-partition passes
-    // never see the bootstrap function table.
+    // Validate the bootstrap composition tree against the full
+    // top-level model view — the `<root>__bootstrap` FunctionProto
+    // and every child bootstrap still live in `temp.functions`
+    // here; per-partition passes never see the bootstrap table.
     validate_bootstrap_composition(&temp, &root_name)?;
 
     let root = temp
@@ -150,12 +149,10 @@ fn process_target(
     }
     if on("synthesize_wire_recvs") {
         synthesize_wire_recvs(&mut graph)?;
-        // check_wire_edge_types runs HERE — after synthesis — so the
-        // Recv nodes exist in the graph and SYNTHESIZED_FROM_KEY carries
-        // the Send's original value NAME (not a node index), which the
-        // TypeSolution can look up via `type_of`. The minted recv-output
-        // value names got `stamped_value_info` entries during synthesis;
-        // a fresh solver run picks them up so the comparison is accurate.
+        // check_wire_edge_types must run AFTER synthesis: the Recv
+        // nodes need to exist, and the freshly minted recv-output
+        // value names need to be in the TypeSolution before the
+        // send-vs-recv type compare is meaningful.
         if type_solver_ran {
             let fresh_solution = run_type_solver(&mut graph, strict_types)?;
             check_wire_edge_types(&graph, &fresh_solution)?;
@@ -170,13 +167,9 @@ fn process_target(
         resolve_slots(&target_function)?;
     }
 
-    // Call `analyze_wire_edges` ONCE per partition map, before the
-    // per-role loop walks each sub_graph for the rest of the
-    // pipeline. The pass reads denotations from the sub_graph
-    // value_info and stamps classification metadata directly onto
-    // the matching `sub_graph.node` Send/Recv NodeProtos —
-    // `analysis.wire_edges` is consumed read-only to drive the
-    // iteration.
+    // analyze_wire_edges stamps classification metadata onto each
+    // sub_graph's Send/Recv nodes; analysis.wire_edges drives the
+    // iteration read-only.
     if on("analyze_wire_edges") {
         for sub_graph in analysis.per_role.values_mut() {
             analyze_wire_edges(sub_graph, &analysis.wire_edges)?;
@@ -245,18 +238,10 @@ fn split_partition(
     } else {
         format!("{module_name}_{role}")
     };
-    // widen the partition composite-name suffix from
-    // 8 hex chars (`u32` mask) to 16 hex chars (full `u64`) so the
-    // birthday-collision bound on partition naming goes from
-    // ~65 k partitions (50 % collision at 2^16) to ~4 G partitions
-    // (50 % collision at 2^32). Closes the narrowing flagged in
-    // docs-plan/sections/Compiler.md §Determinism.
-    //
-    // Two partitions with the same base name (same role on
-    // different builds) still collide if the content is identical
-    // (correct — they ARE the same partition); a body edit shifts
-    // the hash so snapshots from the old version don't accidentally
-    // restore into the new partition.
+    // 16-hex-char (full u64) suffix gives a ~4 G-partition
+    // birthday-collision bound. Identical content under the same
+    // base name collides intentionally (it IS the same partition);
+    // a body edit shifts the hash so snapshots remain partition-keyed.
     let content_hash = crate::function_dedup::hash_node_bodies(&sub_graph.node);
     let composite_name = format!("{base_name}#{content_hash:016x}");
     (composite_name, function)
@@ -300,12 +285,6 @@ fn run_type_solver(
     graph: &mut GraphProto,
     strict: bool,
 ) -> Result<crate::type_solver::TypeSolution, CompileError> {
-    // No production component currently emits
-    // `inventory::submit!{ OpSignatureRegistration { ... } }`, so the
-    // solver always falls through to value_info round-trip. The
-    // `decl_for_op` closure stays in the signature so the recorder
-    // can plug in a real lookup once denotations are stamped
-    // recorder-side under #20.
     let decl_for_op = |_: &str, _: &str| -> Option<&'static bb_ir::atomic::AtomicOpDecl> { None };
 
     let mut solver = crate::type_solver::TypeSolver::from_graph(graph, decl_for_op)

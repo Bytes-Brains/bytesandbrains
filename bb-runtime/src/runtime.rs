@@ -1,16 +1,15 @@
 //! Runtime resource handle threaded into every `dispatch_atomic`
-//! call
+//! call.
 //!
 //! The engine constructs a `RuntimeResourceRef` by split-borrowing
 //! the framework-primitive bundle + the bus before each
 //! `dispatch_atomic` call. Each field is a distinct `&mut`, so the
-//! borrow checker enforces field-level exclusivity - an Op may
+//! borrow checker enforces field-level exclusivity — an Op may
 //! touch any subset.
 //!
 //! Async-completing impls call `ctx.complete_command(cmd_id,
 //! results)`; the engine drains `pending_completions` after the
-//! hook returns + routes them through `handle_completion`
-//! (Phase 5 of the poll cycle).
+//! hook returns and routes them through `handle_completion`.
 
 use std::sync::Arc;
 
@@ -64,21 +63,15 @@ impl CompletionSink for IngressQueue {
     }
 
     fn fail(&self, cmd_id: CommandId, detail: &str) {
-        // pushes the typed `CompletionFailed` variant
-        // instead of re-encoding the failure as a successful
-        // `Completion { results: vec![error_bytes] }`. The legacy
-        // form put error bytes into the parked op's output slot,
-        // which the host saw as a successful completion carrying
-        // garbled bytes — a silent error-as-success masquerade.
-        // The variant routes through `handle_completion_failed`
-        // and surfaces as the typed `OpFailed` step the host can
-        // match on.
+        // Push the typed `CompletionFailed` variant so the parked
+        // op fails through `handle_completion_failed` → typed
+        // `OpFailed`, not via success-bytes masquerading as a
+        // completion.
         //
-        // Per spec §2.1 row S8 the detail string is truncated rather
-        // than rejected at `COMPLETION_DETAIL_CAP`: the host's
-        // `Display`-rendered message must always land so the
-        // component sees a real failure instead of a missing
-        // completion masquerading as a timeout.
+        // The detail string is truncated rather than rejected at
+        // `COMPLETION_DETAIL_CAP`: a `Display`-rendered failure must
+        // always land so the component sees a real failure instead
+        // of a missing completion masquerading as a timeout.
         let truncated = if detail.len() > COMPLETION_DETAIL_CAP {
             let mut end = COMPLETION_DETAIL_CAP;
             while end > 0 && !detail.is_char_boundary(end) {
@@ -106,17 +99,16 @@ pub struct PeerCtx<'a> {
     pub governor: &'a mut PeerGovernor,
     /// `PeerId → (Vec<Address>, ref_count)` registry.
     pub addresses: &'a mut AddressBook,
-    /// Receiver-side back-pressure tracker per
-    /// `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`.
-    /// RX gates + ingress detection sites consult this to record
-    /// overload and decide between emitting a typed
-    /// `BackoffNotice` envelope or silently dropping.
+    /// Receiver-side back-pressure tracker. RX gates + ingress
+    /// detection sites consult this to record overload and decide
+    /// between emitting a typed `BackoffNotice` envelope or silently
+    /// dropping.
     pub backpressure: &'a mut BackpressureTracker,
 }
 
 /// Network/transport state borrowed mutably during dispatch.
 pub struct NetCtx<'a> {
-    /// FIFO of wire envelopes to ship in Phase 8.
+    /// FIFO of wire envelopes ready to ship on the next outbound drain.
     pub outbound: &'a mut OutboundQueue,
     /// Per-NodeSiteId adaptive RTT tracker.
     pub rtt: &'a mut RttTracker,
@@ -152,7 +144,7 @@ pub struct SyscallCtx<'a> {
     pub deadline_match_fired: &'a mut std::collections::HashSet<(u64, u64)>,
     /// `u64` RNG source for the `RngU64` syscall.
     pub rng: &'a mut dyn RngU64Source,
-    /// App events pending Phase 8 emission.
+    /// App events pending emission on the next poll's outbound drain.
     pub pending_app_events: &'a mut Vec<crate::bus::AppEvent>,
 }
 
@@ -402,11 +394,10 @@ impl RuntimeResourceRef<'_> {
         })
     }
 
-    /// -iii - record a wire
-    /// round-trip sample into the RTT tracker. Called on response
-    /// landing (after the matching `WireResponseLanded` event
-    /// surfaces the elapsed time) so all the hierarchical-fallback
-    /// EMA tiers stay current.
+    /// Record a wire round-trip sample into the RTT tracker. Called
+    /// on response landing (after the matching `WireResponseLanded`
+    /// event surfaces the elapsed time) so all the hierarchical-
+    /// fallback EMA tiers stay current.
     pub fn observe_wire_round_trip(
         &mut self,
         target: crate::ids::NodeSiteId,
@@ -421,8 +412,7 @@ impl RuntimeResourceRef<'_> {
 
     /// Mint a fresh `CommandId` via the engine's monotonic counter.
     /// Used by async-suspending syscalls (`After`, `Sleep`,
-    /// `BootstrapDispatch`) that previously called the deprecated
-    /// `CommandId::allocate()` static.
+    /// `BootstrapDispatch`).
     pub fn allocate_command_id(&mut self) -> CommandId {
         let id = *self.current.next_command_id;
         *self.current.next_command_id = self.current.next_command_id.saturating_add(1);
@@ -433,7 +423,7 @@ impl RuntimeResourceRef<'_> {
     /// `dispatch_atomic` returns. Used by `ProtocolRuntime` impls +
     /// any role impl that returned `DispatchResult::Async`. Invoking
     /// this in the same call lets the consumer fire in the same poll
-    /// cycle (Phase 6 catch-up).
+    /// cycle via the engine's catch-up drain.
     pub fn complete_command(
         &mut self,
         cmd_id: CommandId,
@@ -468,23 +458,20 @@ impl RuntimeResourceRef<'_> {
     }
 }
 
-/// Captured async-completion payload. The engine's Phase 5 drains
-/// these from the post-dispatch `RuntimeResourceRef` and routes them
-/// through `Engine::handle_completion`
+/// Captured async-completion payload. The engine drains these from
+/// the post-dispatch `RuntimeResourceRef` and routes them through
+/// `Engine::handle_completion`.
 pub struct PendingCompletion {
     /// The `CommandId` being fulfilled.
     pub cmd_id: CommandId,
     /// `(name, value)` pairs to write to the suspended Op's output
-    /// sites. uses `(String, Box<dyn SlotValue>)`; Stage
-    /// 7's wire layer adds the `WireValue` adapter at the wire
-    /// boundary.
+    /// sites.
     pub results: Vec<(String, Box<dyn SlotValue>)>,
 }
 
-/// Component-scheduled timer kind. Used by
-/// `ProtocolRuntime::on_timer` - protocol
-/// impls schedule timers via `ctx.time.scheduler` and receive the
-/// matured timer back via this newtype.
+/// Component-scheduled timer kind. Used by `ProtocolRuntime::on_timer`:
+/// protocol impls schedule timers via `ctx.time.scheduler` and receive
+/// the matured timer back via this newtype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ComponentTimerKind(pub u32);
 

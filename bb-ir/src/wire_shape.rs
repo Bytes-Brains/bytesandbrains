@@ -1,11 +1,10 @@
 //! Canonical Send / Recv NodeProto shape — the contract every
 //! wire-IR-touching pass + runtime gate agrees on.
 //!
-//! Per `docs-plan/CORRECTED_ARCHITECTURE.md` §Seam: DSL→Compiler /
-//! §Seam: Compiler→Runtime / §Wire format, the wire ops carry a
-//! specific NodeProto shape. Scattered string literals and
-//! divergent value layouts have repeatedly caused contract drift
-//! (the closed CRIT findings around `S5`, `S6`, `S7`, `B6`–`B11`).
+//! Wire ops carry a specific NodeProto shape. Centralizing the
+//! contract here keeps the DSL emitters, compiler passes, and
+//! runtime gates from drifting on string literals or attribute
+//! layouts.
 //!
 //! This module is the **single declarative description** of that
 //! shape. The DSL emits to it; the compiler passes mutate within
@@ -60,24 +59,22 @@
 //! - **`ATTR_PEER` is bytes, not i64.** The peer attribute on a
 //!   Send carries the PeerId's canonical multihash byte form
 //!   (`PeerId::to_bytes()`), NOT a `u64`-collapsed identity hash.
-//!   Closes `B11`/`S6`. The runtime gates parse via
+//!   The runtime gates parse via
 //!   `PeerId::from_bytes(&attr.t)`.
 //!
 //! - **`wire_id` is the pairing token.** The DSL `Graph::wire`
 //!   mints a monotonic u64 and stamps it on BOTH halves; the
 //!   compiler's `discover_wire_edges` pair Send/Recv by it.
-//!   Closes `B7`.
 //!
-//! - **`wire_transport` lives on the NodeProto, not on a
-//!   `WireEdge` clone.** `analyze_wire_edges` mutates
-//!   `partition.functions[0].node[i].metadata_props` in place; the
-//!   `WireEdge` carrier is no longer the load-bearing storage for
-//!   the classification. Closes `B6`/`S5`.
+//! - **`wire_transport` lives on the NodeProto itself.**
+//!   `analyze_wire_edges` stamps it onto
+//!   `partition.functions[0].node[i].metadata_props` in place, so
+//!   downstream passes and the runtime read a single source of
+//!   truth.
 //!
 //! - **`SlotFill.type_hash` is populated from the sender side's
 //!   `T::HASH`.** Receivers dispatch wire bytes via
 //!   `if envelope.fill.type_hash == T::HASH { T::deserialize(&fill.payload) }`.
-//!   Closes `S10`.
 
 /// Wire-op domain. All Send / Recv NodeProtos live under here.
 pub const WIRE_DOMAIN: &str = "ai.bytesandbrains.wire";
@@ -136,8 +133,7 @@ pub fn is_recv(node: &crate::proto::onnx::NodeProto) -> bool {
 }
 
 /// Read the wire_id metadata stamp from a Send or Recv node.
-/// Returns `None` if missing (e.g. legacy hand-built fixtures
-/// without wire_id) or non-numeric.
+/// Returns `None` if the key is absent or non-numeric.
 pub fn read_wire_id(node: &crate::proto::onnx::NodeProto) -> Option<u64> {
     node.metadata_props
         .iter()

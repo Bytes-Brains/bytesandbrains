@@ -24,7 +24,7 @@ pub struct EngineStats {
     /// `(OpRef, ExecId)` pairs on the frontier. Climbing → poll
     /// loop falling behind ingress.
     pub frontier_len: usize,
-    /// Events queued on the typed bus awaiting Phase 3 routing.
+    /// Events queued on the typed bus awaiting routing.
     pub bus_len: usize,
     /// Suspended async commands. Approaching
     /// `NodeConfig.max_pending_async` → cap pressure.
@@ -33,7 +33,7 @@ pub struct EngineStats {
     pub slot_table_occupied: usize,
     /// Approximate MPMC ingress depth.
     pub ingress_depth: usize,
-    /// Envelopes queued for next Phase 8 drain.
+    /// Envelopes queued for next outbound drain.
     pub outbound_queue_depth: usize,
     /// Event kinds with at least one subscriber.
     pub event_subscriptions: usize,
@@ -59,7 +59,7 @@ pub struct Engine {
     pub(crate) graph_index: HashMap<String, u32>,
 
     /// Sub-Module function registry by `(domain, name, overload)`.
-    /// stub (empty); Node populates.
+    /// Populated by `Node` at install time.
     pub(crate) functions: HashMap<(String, String, String), FunctionProto>,
 
     // --- Dispatch --------------------------------------------------
@@ -113,9 +113,9 @@ pub struct Engine {
 
     /// Per-`event_kind` subscription map. Each entry names the
     /// `NodeSiteId`(s) of `EventSource` ops listening for that kind.
-    /// Phase 3 of [`Engine::poll`] writes a `TriggerValue` into each
+    /// The bus-routing pass writes a `TriggerValue` into each
     /// subscribed site at a fresh `ExecId` and pushes the site's
-    /// downstream consumers - matching the wire delivery semantics
+    /// downstream consumers — matching the wire delivery semantics
     /// per `docs/ADDRESSING.md` so bus + wire share one model.
     pub(crate) event_subscriptions: HashMap<String, Vec<NodeSiteId>>,
 
@@ -132,23 +132,20 @@ pub struct Engine {
     /// surrendering ownership.
     pub(crate) ingress: Arc<IngressQueue>,
 
-    /// Lifecycle phases queued for Phase 7 firing by
-    /// `Engine::fire_lifecycle`.
+    /// Lifecycle phases queued for firing by `Engine::fire_lifecycle`
+    /// on the next poll.
     pub(crate) fired_phases: Vec<String>,
 
-    /// Snapshot of the ingress queue depth at Phase 1 entry, before
-    /// the drain runs. Used by the backpressure detection hook in
-    /// `process_ingress_event` to compare against the configured
-    /// high-water mark per
-    /// `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-    /// §6(a). Refreshed every poll cycle.
+    /// Snapshot of the ingress queue depth at the start of the
+    /// engine's ingress drain. Used by the backpressure detection
+    /// hook in `process_ingress_event` to compare against the
+    /// configured high-water mark. Refreshed every poll cycle.
     pub(crate) phase1_pre_drain_depth: usize,
 
     // --- Bootstrap ---------------------------------------------------
     /// Consolidated bootstrap state — every field the install path,
     /// poll seeder, and body-op gate read goes through here. See
-    /// [`crate::engine::bootstrap::BootstrapState`] for the field
-    /// roles + the host-driven redesign roadmap.
+    /// [`crate::engine::bootstrap::BootstrapState`] for field roles.
     pub(crate) bootstrap: crate::engine::bootstrap::BootstrapState,
 
     // --- Dispatcher registries (per-Engine) ------------------------
@@ -161,19 +158,18 @@ pub struct Engine {
     /// Concrete-type `Bootstrap` dispatchers, indexed by
     /// `TypeId::of::<T>()`. Populated by
     /// [`Engine::register_bootstrap_dispatcher`] at install time and
-    /// consulted by `fire_component_bootstrap` (F3 Commit 3 Component
-    /// arm of `fire_ready_bootstrap`) to dispatch the synthetic
-    /// single-op against the bound Component's
+    /// consulted by `fire_component_bootstrap` to dispatch the
+    /// synthetic single-op against the bound Component's
     /// [`crate::contracts::bootstrap::Bootstrap::bootstrap`] impl.
     pub(crate) bootstrap_dispatchers:
         HashMap<std::any::TypeId, crate::engine::invoke::BootstrapDispatchFn>,
 
     // --- Generic slot registry -------------------------------------
-    /// Author-chosen-slot-name → `ComponentRef` registry. Generic
-    /// over component role: indexes EVERY bound Component (backends,
-    /// indexes, models, peer selectors, custom) by the slot name
-    /// the author chose when binding (default = field name, override
-    /// via `#[bb::slot("custom")]`). Components reach declared
+    /// Slot-name → `ComponentRef` registry. Generic over component
+    /// role: indexes EVERY bound Component (backends, indexes,
+    /// models, peer selectors, custom) by binding slot name
+    /// (defaults to the field name; overridable via
+    /// `#[bb::slot("custom")]`). Components reach declared
     /// dependencies through this map at dispatch time via
     /// [`crate::runtime::ComponentsView::for_slot`].
     ///
@@ -465,12 +461,10 @@ impl Engine {
         // value on their next push.
         self.ingress
             .set_completion_result_cap(config.max_completion_result_bytes);
-        // Reseed the BackpressureTracker with the configured knobs
-        // per
-        // `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-        // §6. `apply_config_caps` is the canonical entry the host
-        // calls before the first poll, so a fresh tracker reflecting
-        // the resolved knobs is the only state observers see.
+        // Reseed the BackpressureTracker with the configured knobs.
+        // `apply_config_caps` is the canonical entry the host calls
+        // before the first poll, so a fresh tracker reflecting the
+        // resolved knobs is the only state observers see.
         self.framework.peer_state.backpressure = crate::framework::BackpressureTracker::with_config(
             config.backpressure_high_water_pct,
             config.backpressure_k_before_silent,
@@ -530,12 +524,11 @@ impl Engine {
 
     /// Write a value into the slot table at `(site, exec_id)`,
     /// releasing the prior occupant's `charged_bytes` against
-    /// `ingress_bytes_in_flight` before the new carrier moves in.
-    /// The new carrier's `charged_bytes` is NOT re-added — admission
-    /// callers (`decode_typed_fill`, `deliver_event`, etc.) have
-    /// already run `try_charge` against the wire-byte budget. This
-    /// helper is the slot-table-side bookkeeping that closes the
-    /// loop on overwrite.
+    /// `ingress_bytes_in_flight`. The incoming carrier's
+    /// `charged_bytes` is NOT re-added — admission callers
+    /// (`decode_typed_fill`, `deliver_event`, etc.) have already run
+    /// `try_charge` against the wire-byte budget. This helper is the
+    /// slot-table-side bookkeeping that closes the loop on overwrite.
     ///
     /// Returns the prior boxed value (if any) so the caller can
     /// run additional teardown.
@@ -587,7 +580,6 @@ impl Engine {
     /// reads on every poll cycle (no allocation). Production
     /// observability: operators see saturation building up before
     /// the process locks up.
-    /// introspection surface.
     pub fn engine_stats(&self) -> EngineStats {
         EngineStats {
             frontier_len: self.exec.frontier.len(),
@@ -837,9 +829,9 @@ impl Engine {
 
     /// Subscribe a `NodeSiteId` to bus events of `event_kind` (the
     /// discriminator returned by [`crate::bus::NodeEvent::kind`]).
-    /// Phase 3 of [`Engine::poll`] writes a `TriggerValue` to each
+    /// The bus-routing pass writes a `TriggerValue` to each
     /// subscribed site at a fresh `ExecId` and pushes the site's
-    /// downstream consumers onto the frontier - uniform with wire
+    /// downstream consumers onto the frontier — uniform with wire
     /// delivery semantics per `docs/ADDRESSING.md`.
     ///
     /// `Node` calls this at install time for every
@@ -861,12 +853,12 @@ impl Engine {
         Arc::clone(&self.ingress)
     }
 
-    /// Queue a lifecycle phase for Phase 7 firing on the next
-    /// `poll()` call. The framework emits
-    /// `EngineStep::LifecycleFired { phase }` for each queued phase
-    /// and also pushes every `LifecyclePhase` op enrolled under that
-    /// phase name (via [`Engine::register_lifecycle_op`]) onto the
-    /// frontier with a fresh `ExecId`.
+    /// Queue a lifecycle phase for firing on the next `poll()`
+    /// call. The framework emits `EngineStep::LifecycleFired { phase }`
+    /// for each queued phase and also pushes every `LifecyclePhase`
+    /// op enrolled under that phase name (via
+    /// [`Engine::register_lifecycle_op`]) onto the frontier with a
+    /// fresh `ExecId`.
     pub fn fire_lifecycle(&mut self, phase: &str) {
         self.fired_phases.push(phase.to_string());
     }
@@ -1432,10 +1424,7 @@ impl Engine {
     }
 
     /// Stage a host-supplied [`crate::engine::BootstrapRequest`] and
-    /// fire the target Module's bootstrap immediately. F5 immediate-
-    /// fire entry point per
-    /// `docs/internal/superpowers/specs/2026-06-25-host-driven-bootstrap.md`
-    /// §3.3:
+    /// fire the target Module's bootstrap immediately:
     ///
     /// 1. Resolve `request.target` → `FunctionKey` →
     ///    `graph_name` → `graph_idx`.

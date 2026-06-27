@@ -1,12 +1,6 @@
 //! Open `GateContract` inventory consumed by
 //! [`crate::validate_runtime_complete`].
 //!
-//! Per `docs-plan/CORRECTED_ARCHITECTURE.md` §Error model invariant
-//! (iv):
-//!
-//! > validate_runtime_complete checks insertion success via inventory
-//! > `GateContract` (NEVER presence-only — closes `chief:S12`).
-//!
 //! Each gate-insertion pass declares a `GateContract` impl + emits
 //! `inventory::submit! { GateContractRegistration { ... } }`; the
 //! validator iterates the inventory and runs every registered

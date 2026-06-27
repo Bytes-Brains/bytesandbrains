@@ -108,9 +108,8 @@ pub const CHAIN_TARGETS_KEY: &str = "ai.bytesandbrains.wire.chain_targets";
 
 // ── ATTR_PEER (re-export for ergonomic single-import) ──────────────
 
-/// Re-export of [`crate::syscall_ids::ATTR_PEER`] so call sites
-/// reaching for a single `bb_ir::keys::*` import don't have to
-/// remember the historical syscall-ids home.
+/// Re-export of [`crate::syscall_ids::ATTR_PEER`] so a single
+/// `bb_ir::keys::*` import covers every wire-node key.
 pub use crate::syscall_ids::ATTR_PEER;
 
 /// Re-export of [`crate::version::FRAMEWORK_IR_VERSION_KEY`] for
@@ -255,8 +254,8 @@ pub fn read_model_metadata<'a>(model: &'a ModelProto, key: &str) -> Option<&'a s
 
 use crate::proto::onnx::FunctionProto;
 
-/// Read `MODULE_PHASE_KEY` off a FunctionProto. `None` for legacy
-/// functions emitted before the bootstrap track.
+/// Read `MODULE_PHASE_KEY` off a FunctionProto. `None` when the
+/// key is absent.
 pub fn read_function_module_phase(function: &FunctionProto) -> Option<&str> {
     function
         .metadata_props

@@ -457,10 +457,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ServerLogic Node installed at peer {SERVER_PEER}");
     println!("  ServerReduce Node installed at peer {SERVER_PEER}");
 
-    // F4 host-driven bootstrap: install records the bootstrap targets
-    // but no longer arms the queue. Each Node calls
-    // `run_bootstrap` to drive its install-order bootstraps to
-    // completion before the body phase observes its first poll.
+    // Host-driven bootstrap: install records the bootstrap targets;
+    // each Node calls `run_bootstrap` to drive its install-order
+    // bootstraps to completion before the body phase observes its
+    // first poll.
     let mut total = 0usize;
     for node in [&mut client, &mut server_logic, &mut server_reduce] {
         let boot_steps = node

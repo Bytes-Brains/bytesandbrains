@@ -1,5 +1,4 @@
-//! Lifecycle + bootstrap ops. //!
-//! Spec: Sub-D in `docs/IR_AND_DSL.md` §5a.
+//! Lifecycle + bootstrap ops.
 //!
 //! - `LifecyclePhase(phase: int) → Trigger` - fires when
 //!   `Engine::fire_lifecycle(phase)` is called.

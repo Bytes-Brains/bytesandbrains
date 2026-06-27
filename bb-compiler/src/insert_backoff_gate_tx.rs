@@ -61,11 +61,8 @@ fn build_gate_node(
     gate_output: &str,
     peer_bytes: &[u8],
 ) -> NodeProto {
-    // stamp the destination peer as `attribute.s`
-    // (multihash bytes) via `wire_shape::stamp_peer_bytes`. The
-    // legacy `attribute.i` u64-collapse fabricated wrong peers
-    // for any multihash that didn't fit in 8 identity-coded
-    // bytes (the production multihash form).
+    // Stamp the destination peer as `attribute.s` (multihash bytes);
+    // an int encoding would lose multihashes that exceed 8 bytes.
     let mut node = NodeProto {
         op_type: GATE_OP_TYPE.to_string(),
         domain: GATE_DOMAIN.to_string(),

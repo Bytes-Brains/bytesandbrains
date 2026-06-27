@@ -4,11 +4,9 @@
 //! [`bb_runtime::framework::BackoffTable`] and drops the send if the
 //! destination peer is still in cooldown.
 //!
-//! The destination peer rides as `ATTR_PEER` on the gate NodeProto.
-//! The canonical form is `attribute.s: bytes` (multihash, per
-//! [`bb_ir::wire_shape::ATTR_PEER`] / [`bb_ir::wire_shape::read_peer_bytes`]),
-//! and the legacy i64 form (`attribute.i`) is accepted during the
-//! migration so older compiler emit-sites still dispatch.
+//! The destination peer rides as `ATTR_PEER` on the gate NodeProto
+//! as multihash bytes on `attribute.s` (per
+//! [`bb_ir::wire_shape::ATTR_PEER`] / [`bb_ir::wire_shape::read_peer_bytes`]).
 
 use bb_ir::proto::onnx::NodeProto;
 use bb_ir::wire_shape;
@@ -57,10 +55,8 @@ pub fn invoke(
     }
 }
 
-/// Read the gate's destination peer. Tries the canonical bytes
-/// form first (`attribute.s` carrying multihash bytes), falls
-/// back to the legacy `attribute.i` i64 form for nodes emitted
-/// before the wire-IR migration.
+/// Read the gate's destination peer from `ATTR_PEER` (multihash
+/// bytes on `attribute.s`).
 fn read_peer_attr(node: &NodeProto) -> Option<PeerId> {
     wire_shape::read_peer_bytes(node).and_then(|bytes| PeerId::from_bytes(bytes).ok())
 }

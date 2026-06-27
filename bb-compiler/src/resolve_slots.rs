@@ -1,28 +1,18 @@
-//! Pass 11 - `resolve_slots` + pre-flight. Final check before a
-//! ModelProto is emitted
+//! `resolve_slots` + pre-flight. Final check before a ModelProto is
+//! emitted: rejects a Module where the same role domain hosts BOTH
+//! a concrete-type provider AND a generic `(required_trait,
+//! slot_id)` provider — that combination is `AmbiguousRole`.
 //!
-//! implements **only the AmbiguousRole detection** per
-//! `docs/internal/IMPLEMENTATION_PLAN.md` :
-//!
-//! For each role domain (`ai.bytesandbrains.role.<role>`), collect
-//! the `concrete_type` providers AND the `(required_trait, slot_id)`
-//! providers visible in the NodeProtos. If BOTH kinds appear under
-//! the same role → reject with `CompileError::AmbiguousRole`.
-//!
-//! The runner (`runner.rs`) maps the `AmbiguousRole` variant to
-//! `BuildError::AmbiguousRole` for the public Module::build() surface
-//! per the plan.
-//!
-//! Other §14 checks (slot binding existence, decoder availability,
-//! opset coverage) require bindings + wire types;
-//! they're deferred.
+//! The runner maps `CompileError::AmbiguousRole` to
+//! `BuildError::AmbiguousRole` on the public `Module::build()`
+//! surface.
 
 use std::collections::BTreeMap;
 
 use crate::error::CompileError;
 use bb_ir::proto::onnx::FunctionProto;
 
-/// Resolve slots + run pre-flight. Pure per ANALYSIS.md §3.2.
+/// Resolve slots + run pre-flight. Pure.
 pub fn resolve_slots(function: &FunctionProto) -> Result<(), CompileError> {
     // Per role: collect distinct concrete_type providers + distinct
     // (required_trait, slot_id) generic providers.

@@ -227,8 +227,8 @@ impl Module for ServerLogic {
 
 /// Composition: one `g.net_out` between client and server declares
 /// the partition boundary. The compiler emits one target function
-/// per side; a single Node installs both via the new multi-target
-/// `install([client, server])` API, sharing the `model` +
+/// per side; a single Node installs both via
+/// `install([client, server])`, sharing the `model` +
 /// `aggregator` slot bindings.
 struct FederatedRound {
     client: ClientLogic,
@@ -363,10 +363,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("─── STEP 4: Node::run_bootstrap + drive the poll cycle to quiescence");
 
-    // F4 host-driven bootstrap: install records the targets but no
-    // longer arms the queue. Drive `run_bootstrap` before any body
-    // ingress so every install-order partition runs its setup
-    // recording before the body phase observes the first poll.
+    // Host-driven bootstrap: install records the targets; drive
+    // `run_bootstrap` before any body ingress so every install-order
+    // partition runs its setup recording before the body phase
+    // observes the first poll.
     let mut bootstrap_completes = 0usize;
     let mut total_steps = 0usize;
     let boot_steps = node

@@ -1,10 +1,8 @@
 //! Typed in-Node event bus. Cross-Component signaling per
 //! `docs/ENGINE.md` §13.1.
 //!
-//! Components publish events via the bus; the engine's Phase 3
-//! (`route_bus_events`) routes them to subscribed Components.
-//! ships the publish + drain surface; 's syscall
-//! opset + 's lifecycle wire up the subscription routing.
+//! Components publish events via the bus; the engine's bus-event
+//! routing pass delivers them to subscribed Components.
 
 use std::collections::VecDeque;
 
@@ -68,7 +66,7 @@ pub enum InfraEvent {
     /// malformed, or the destination address parsing failed. The
     /// engine drops the envelope's slot fill rather than writing
     /// garbage into a slot; this event lets the host observe the
-    /// drop. Emitted by the engine's Phase 1 envelope router.
+    /// drop. Emitted by the inbound envelope router.
     WireDecodeFailure {
         /// Wire-type hash that the envelope advertised (0 if the
         /// failure occurred before the hash could be read).
@@ -124,7 +122,7 @@ pub enum InfraEvent {
     },
     /// The typed bus dropped `count` oldest events to make room for
     /// newer publishes when `NodeConfig.bus_capacity` was hit.
-    /// Emitted by the engine's Phase 3 if any drops accumulated
+    /// Emitted by the bus-routing pass if any drops accumulated
     /// since the last poll.
     BusOverflow {
         /// Number of events FIFO-dropped since the last poll.
@@ -142,38 +140,34 @@ pub enum InfraEvent {
         /// The Send op that failed to resolve.
         op_ref: OpRef,
     },
-    /// -v - φ-accrual failure
-    /// detector crossed the suspect threshold for the named
-    /// logical site. Components (gossip overlays, peer-sampling
-    /// services, deadline planners) subscribe to react.
+    /// φ-accrual failure detector crossed the suspect threshold
+    /// for the named logical site. Components (gossip overlays,
+    /// peer-sampling services, deadline planners) subscribe to react.
     PeerSuspect {
         /// Suspect logical site.
         site: crate::ids::NodeSiteId,
         /// Current φ value (informational; subscribers can ignore).
         phi: f64,
     },
-    /// -v - φ-accrual failure
-    /// detector crossed the hard-down threshold for the named
-    /// logical site.
+    /// φ-accrual failure detector crossed the hard-down threshold
+    /// for the named logical site.
     PeerDown {
         /// Down logical site.
         site: crate::ids::NodeSiteId,
         /// Current φ value.
         phi: f64,
     },
-    /// -v - φ collapsed back below
-    /// the suspect threshold after a `PeerSuspect` or `PeerDown`
-    /// was emitted. Lets subscribers reinstate the peer.
+    /// φ collapsed back below the suspect threshold after a
+    /// `PeerSuspect` or `PeerDown` was emitted. Lets subscribers
+    /// reinstate the peer.
     PeerLive {
         /// Recovered logical site.
         site: crate::ids::NodeSiteId,
     },
-    /// A `BackoffNotice` envelope was emitted to `peer` per the
-    /// backpressure protocol at
-    /// `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-    /// §7. Surfaces the local overload decision on the bus so ops
-    /// dashboards + Component authors who want to react to local
-    /// overload can subscribe.
+    /// A `BackoffNotice` envelope was emitted to `peer`. Surfaces
+    /// the local overload decision on the bus so ops dashboards +
+    /// Component authors who want to react to local overload can
+    /// subscribe.
     BackoffNoticeSent {
         /// The sender the receiver asked to slow down.
         peer: PeerId,
@@ -184,10 +178,9 @@ pub enum InfraEvent {
     },
     /// `peer` crossed the K-notices-without-recovery threshold;
     /// subsequent envelopes from that peer are dropped silently at
-    /// Phase 1 of `Engine::poll` until the peer recovers per
-    /// `docs/internal/superpowers/specs/2026-06-23-backpressure-runtime.md`
-    /// §3. Emitted once per silent-drop transition; the recovery
-    /// path reuses the existing `PeerLive` event.
+    /// the inbound boundary until the peer recovers. Emitted once
+    /// per silent-drop transition; the recovery path reuses the
+    /// existing `PeerLive` event.
     SilentDropActive {
         /// The sender now in silent-drop mode.
         peer: PeerId,
@@ -465,8 +458,7 @@ pub enum OpErrorKind {
     /// eligible failure).
     Cooldown,
     /// Catch-all for failures that don't fit a more specific kind.
-    /// Default for legacy call sites that only carry a `detail`
-    /// string.
+    /// Default for call sites that only carry a `detail` string.
     Other,
 }
 
@@ -478,18 +470,13 @@ impl Default for OpErrorKind {
 
 /// Op invocation failure detail. Surfaced by the engine when
 /// `dispatch_atomic` returns `Err` or the dispatch table lookup
-/// misses.
-///
-/// three-field shape `{ kind, reason, detail }`:
-/// `kind` is a stable categorical label; `reason` is a `&'static
-/// str` short label (e.g. `"blocklisted"`, `"cooldown"`) that
-/// callers can match on; `detail` is a free-form description for
-/// human-readable diagnostics. Existing call sites that built
-/// `OpError { detail }` keep working via the `Default` impl —
-/// they implicitly get `kind: Other` and `reason: ""`.
+/// misses. Three-field shape: `kind` is a stable categorical label,
+/// `reason` is a `&'static str` (e.g. `"blocklisted"`, `"cooldown"`)
+/// callers can match on, `detail` is a free-form human-readable
+/// description.
 #[derive(Clone, Debug, Default)]
 pub struct OpError {
-    /// Categorical kind (default `Other` for legacy call sites).
+    /// Categorical kind. Default `Other`.
     pub kind: OpErrorKind,
     /// Stable diagnostic label (e.g. `"blocklisted"`, `"cooldown"`,
     /// `"nak"`) consumers match on. Default `""`.
@@ -515,13 +502,14 @@ impl std::fmt::Display for OpError {
 impl std::error::Error for OpError {}
 
 /// Typed in-Node event bus. Carries published events from one
-/// poll cycle to the next; Phase 3 of the engine's poll drains the
-/// queue and routes to subscribed `NodeSiteId`s.
+/// poll cycle to the next; the engine's bus-routing pass drains
+/// the queue and routes to subscribed `NodeSiteId`s.
 ///
 /// Bounded by `NodeConfig.bus_capacity` (default 1024). When a
 /// publish would exceed the cap, the oldest event is FIFO-dropped
-/// and a counter increments. Phase 3 reads the counter and emits
-/// `InfraEvent::BusOverflow { count }` so the host sees the loss.
+/// and a counter increments. The routing pass reads the counter
+/// and emits `InfraEvent::BusOverflow { count }` so the host sees
+/// the loss.
 #[derive(Default)]
 pub struct TypedBus {
     queue: VecDeque<NodeEvent>,
@@ -549,8 +537,9 @@ impl TypedBus {
         self.cap = cap;
     }
 
-    /// Publish an event. The engine's Phase 3 routes published events
-    /// to subscribed Components in the next poll cycle.
+    /// Publish an event. The engine's bus-routing pass delivers
+    /// published events to subscribed Components in the next poll
+    /// cycle.
     pub fn publish(&mut self, event: NodeEvent) {
         if let Some(cap) = self.cap {
             while self.queue.len() >= cap {
@@ -561,7 +550,7 @@ impl TypedBus {
         self.queue.push_back(event);
     }
 
-    /// Drain all queued events. Called by Phase 3 of the poll cycle.
+    /// Drain all queued events. Called by the engine's bus-routing pass.
     pub fn drain(&mut self) -> Vec<NodeEvent> {
         self.queue.drain(..).collect()
     }

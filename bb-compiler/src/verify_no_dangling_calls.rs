@@ -1,24 +1,8 @@
-//! verifier.
-//!
-//! After `wrap_as_model` assembles a `ModelProto`, every entry in
-//! `model.functions[1..]` is supposed to be a sub-function referenced
-//! by a CALL NodeProto chain rooted at `model.functions[0]`. This
-//! verifier double-checks the structural invariant Phase 2's
-//! `Graph::with_module` is supposed to maintain - a DSL bug that
-//! pushes an orphan sub-function (or emits a CALL chasing a missing
-//! function) would be caught here instead of failing opaquely at
-//! runtime CALL dispatch.
-//!
-//! The verifier runs as a final step inside
-//! [`crate::run_pipeline_with_options`] (right after the
-//! `wrap_as_model` call). It's deliberately structural: it does NOT
-//! traverse into hoisted bodies' inputs / outputs / metadata, only
-//! the CALL graph. Hoisted FunctionProtos with no CALL referencing
-//! them are still functions in `model.functions[]`; if a future pass
-//! adds reachability-pruning, this verifier promotes from
-//! "double-check the DSL emitted a consistent table" to "enforce no
-//! orphans". The hard error is therefore reserved for "CALL chases a
-//! function the table doesn't contain" today.
+//! Structural verifier: every entry in `model.functions[1..]` must
+//! be reachable from `model.functions[0]` via the CALL chain. Errors
+//! when a CALL chases a function name absent from `model.functions`.
+//! Orphan entries (no CALL referencing them) are tolerated today; a
+//! later reachability-pruning pass may tighten this.
 
 use std::collections::{HashMap, HashSet};
 

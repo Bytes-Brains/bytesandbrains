@@ -1,39 +1,28 @@
-//! Pass 1 - `validate`. Structural sanity check per
-//! `docs/ANALYSIS.md` §4.
+//! Structural sanity check. Reject malformed input before any
+//! other pass mutates it. Pure function over `GraphProto`.
 //!
-//! Reject malformed input before any other pass mutates it. Pure
-//! function over `GraphProto` per ANALYSIS.md §3.2.
+//! Implemented rules:
 //!
-//! implements 6 of the 8 rules:
-//!
-//! - Rule 1 - op type known (framework reserved opsets + `ai.onnx`).
-//! - Rule 2 - inputs reachable (every NodeProto.input traces to
-//!   upstream output or graph input).
-//! - Rule 3 - outputs unique (no two ops write the same value name).
-//! - Rule 4 - wire pairing → deferred to (no wire ops yet).
-//! - Rule 5 - type declarations present (every graph input has a
-//!   matching `ValueInfoProto`).
-//! - Rule 6 - slot metadata well-formed (role-domain NodeProtos
-//!   carry the canonical metadata keys).
-//! - Rule 7 - no cycles (topological sort).
-//! - Rule 8 - opset versions imported → deferred to (no
-//!   opset_import wiring yet).
+//! - Rule 1 — op type known (framework reserved opsets + `ai.onnx`).
+//! - Rule 2 — inputs reachable.
+//! - Rule 3 — outputs unique.
+//! - Rule 5 — every graph input has a matching `ValueInfoProto`.
+//! - Rule 6 — role-domain NodeProtos carry canonical metadata.
+//! - Rule 7 — no cycles.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::error::ValidationError;
 use bb_ir::proto::onnx::GraphProto;
 
-/// Validate the recorded graph. Pure per ANALYSIS.md §3.2.
+/// Validate the recorded graph. Pure.
 pub fn validate(graph: &GraphProto) -> Result<(), ValidationError> {
     rule_1_known_op(graph)?;
     rule_2_inputs_reachable(graph)?;
     rule_3_outputs_unique(graph)?;
-    // Rule 4 deferred - no wire ops.
     rule_5_type_declarations_present(graph)?;
     rule_6_slot_metadata_well_formed(graph)?;
     rule_7_no_cycles(graph)?;
-    // Rule 8 deferred - no opset_import wiring.
     Ok(())
 }
 

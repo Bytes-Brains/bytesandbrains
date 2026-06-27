@@ -6,9 +6,8 @@
 //! `detail` carries a stable label (`blocklisted` / `not_allowlisted`
 //! / `cooldown`).
 //!
-//! The peer identity rides as `ATTR_PEER` on the gate NodeProto.
-//! The canonical form is `attribute.s: bytes` (multihash); the
-//! legacy i64 form is accepted during the wire-IR migration.
+//! The peer identity rides as `ATTR_PEER` on the gate NodeProto
+//! as multihash bytes on `attribute.s`.
 
 use bb_ir::proto::onnx::NodeProto;
 use bb_ir::wire_shape;
@@ -73,10 +72,8 @@ pub fn reason_label(reason: &BlockReason) -> &'static str {
     }
 }
 
-/// Read the gate's destination peer. Tries the canonical bytes
-/// form first (`attribute.s` carrying multihash bytes), falls
-/// back to the legacy `attribute.i` i64 form for nodes emitted
-/// before the wire-IR migration.
+/// Read the gate's destination peer from `ATTR_PEER` (multihash
+/// bytes on `attribute.s`).
 fn read_peer_attr(node: &NodeProto) -> Option<PeerId> {
     wire_shape::read_peer_bytes(node).and_then(|bytes| PeerId::from_bytes(bytes).ok())
 }

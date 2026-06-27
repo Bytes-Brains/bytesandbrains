@@ -1,6 +1,5 @@
-//! Pass 5 - `partition_by_wire_ops`. Slice the recorded function
-//! into per-BB-Node sub-graphs by wire-op reachability per
-//! `docs/COMPILER.md` §8.
+//! Slice the recorded function into per-BB-Node sub-graphs by
+//! wire-op reachability.
 //!
 //! Wire ops (`Send`, `SendReqBatched`, `SendResp`, `Recv`, `RecvReq`,
 //! `RecvRespBatched` under domain `ai.bytesandbrains.wire`) are the
@@ -8,10 +7,6 @@
 //! iff there is a dataflow path between them that does NOT cross a
 //! wire op.
 //!
-//! Each partition is named from the longest common
-//! `ai.bytesandbrains.module_instance` prefix across its non-wire
-//! nodes (the chain stamped by `Graph::with_module`). Partitions
-//! whose nodes share no common prefix fall back to `@default`.
 //! Wire ops attach to the partition on their data side: Send-flavored
 //! ops join the partition of their data-input producers, Recv-flavored
 //! ops join the partition of their data-output consumers.
@@ -84,15 +79,11 @@ pub struct WireEdge {
     pub recv_node: NodeProto,
 }
 
-/// Partition the graph by inferred home class. Pure per
-/// COMPILER.md §3.2.
+/// Partition the graph by inferred home class. Pure.
 ///
 /// After [`super::infer_peer_classes`] has stamped every NodeProto
 /// with `HOME_CLASS_KEY`, partitioning is a direct group-by on that
-/// key - the dataflow shape already defines class membership, so
-/// neither union-find nor `module_instance` LCP naming is needed.
-/// Nodes lacking a home stamp (hand-built fixtures, legacy single-
-/// Node Modules) fall through to
+/// key. Nodes lacking a home stamp fall through to
 /// [`SELF_CLASS`](super::peer_class::SELF_CLASS).
 pub fn partition_by_wire_ops(graph: &GraphProto) -> Result<NetworkAnalysis, CompileError> {
     let mut per_role: BTreeMap<String, GraphProto> = BTreeMap::new();
@@ -112,11 +103,9 @@ pub fn partition_by_wire_ops(graph: &GraphProto) -> Result<NetworkAnalysis, Comp
     let input_by_name: HashMap<&str, &ValueInfoProto> =
         graph.input.iter().map(|v| (v.name.as_str(), v)).collect();
 
-    // forward each role's relevant slice of
-    // `graph.output` so the post-partition validator + downstream
-    // passes (analyze_wire_edges, the gate-rx inserters) see the
-    // same "this value crosses the boundary" hints the recorder
-    // stamped on the original ModelProto.
+    // Forward each role's slice of `graph.output` so downstream
+    // passes (analyze_wire_edges, gate-rx inserters) see the
+    // recorder-stamped "this value crosses the boundary" hints.
     let output_by_name: HashMap<&str, &ValueInfoProto> =
         graph.output.iter().map(|v| (v.name.as_str(), v)).collect();
 

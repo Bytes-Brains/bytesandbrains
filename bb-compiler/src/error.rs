@@ -110,10 +110,10 @@ impl std::error::Error for ValidationError {}
 /// Errors surfaced by any compiler pass beyond `validate`.
 #[derive(Debug)]
 pub enum CompileError {
-    /// Pass 1 - wrapped [`ValidationError`].
+    /// Wrapped [`ValidationError`] from the structural `validate` pass.
     Validation(ValidationError),
 
-    /// Pass 2 - `expand_ops` failed for a specific op.
+    /// `expand_ops` failed for a specific op.
     ExpansionFailed {
         /// `NodeProto.op_type`.
         op_type: String,
@@ -123,7 +123,7 @@ pub enum CompileError {
         reason: String,
     },
 
-    /// Pass 7 - `runtime.<op>()` returned an error during role-method
+    /// `runtime.<op>()` returned an error during role-method
     /// inlining.
     RoleMethodFailed {
         /// Slot name (e.g. `"backend"`, `"model"`).
@@ -134,9 +134,9 @@ pub enum CompileError {
         source: String,
     },
 
-    /// Pass 11 - a concrete impl satisfying role R coexists with a
-    /// generic placeholder of role R in the same Module. The runner
-    /// surfaces this as `BuildError::AmbiguousRole` ().
+    /// A concrete impl satisfying role R coexists with a generic
+    /// placeholder of role R in the same Module. The runner
+    /// surfaces this as `BuildError::AmbiguousRole`.
     AmbiguousRole {
         /// Role domain (e.g. `"ai.bytesandbrains.role.index"`).
         role: String,

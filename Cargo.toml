@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version       = "0.3.4"
+version       = "0.3.5"
 edition       = "2021"
 rust-version  = "1.86"
 license       = "AGPL-3.0-or-later"
@@ -80,16 +80,16 @@ test-components = ["bb-ops/test-components", "bb-runtime/test-components"]
 # itself has no direct external dependencies; the `tracing-otel`
 # feature delegates to `bb-runtime/tracing-otel` so the optional
 # OTel stack lives where it's actually used.
-bb-compiler     = { path = "bb-compiler", version = "0.3.4" }
-bb-derive       = { path = "bb-derive", version = "0.3.4" }
-bb-dsl          = { path = "bb-dsl", version = "0.3.4" }
-bb-ir           = { path = "bb-ir", version = "0.3.4" }
-bb-runtime      = { path = "bb-runtime", version = "0.3.4", default-features = false }
+bb-compiler     = { path = "bb-compiler", version = "0.3.5" }
+bb-derive       = { path = "bb-derive", version = "0.3.5" }
+bb-dsl          = { path = "bb-dsl", version = "0.3.5" }
+bb-ir           = { path = "bb-ir", version = "0.3.5" }
+bb-runtime      = { path = "bb-runtime", version = "0.3.5", default-features = false }
 # bb-ops sits BELOW bb-runtime in the dep DAG (bb-runtime hosts the
 # Engine + SyscallRegistration framework; bb-ops's inventory
 # submissions are walked by the engine at install). Listed after
 # bb-runtime so cargo's resolution order matches the build order.
-bb-ops          = { path = "bb-ops", version = "0.3.4", default-features = false }
+bb-ops          = { path = "bb-ops", version = "0.3.5", default-features = false }
 
 [build-dependencies]
 prost-build = { workspace = true }

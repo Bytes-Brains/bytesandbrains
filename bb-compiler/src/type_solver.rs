@@ -33,12 +33,12 @@
 //!
 //! ## Scope
 //!
-//! T4 implements [`TypeRelation::SameElementType`] and
-//! [`TypeRelation::Elementwise`] - the two highest-frequency
+//! Currently handles [`TypeRelation::SameElementType`] and
+//! [`TypeRelation::Elementwise`] — the two highest-frequency
 //! relations covering most arithmetic + reduction ops. Other
 //! variants (`BroadcastShape`, `SameType`, `ReduceOver`, `Custom`)
-//! plug in by extending the per-variant handler match inside
-//! the solver's internal `run_relation` dispatch.
+//! plug in by extending the per-variant handler match inside the
+//! solver's internal `run_relation` dispatch.
 
 use std::collections::HashMap;
 
@@ -402,11 +402,8 @@ impl TypeSolver {
             TypeRelation::BroadcastShape { .. } => self.run_broadcast_shape(&slots),
             TypeRelation::ReduceOver { .. } => self.run_reduce_over(&slots),
             TypeRelation::Custom { run, .. } => {
-                // Custom relations get a borrowed view of the
-                // participating slots. The framework's
-                // CustomRelationCtx will gain a real shape in T5;
-                // for now we surface the relation's name as
-                // unimplemented.
+                // Custom relations are not yet implemented;
+                // defer until `CustomRelationCtx` has a real shape.
                 let _ = run;
                 Ok(RelationResult::Defer)
             }
@@ -452,10 +449,9 @@ impl TypeSolver {
         })
     }
 
-    /// `SameElementType` - every Tensor-typed slot shares an
-    /// element type. T4 simplification: treat as `SameType` since
-    /// shape isn't tracked yet. T5 will refine this when explicit
-    /// shape constraints land.
+    /// `SameElementType` — every Tensor-typed slot shares an
+    /// element type. Currently treated as `SameType` (shape not yet
+    /// tracked); will tighten once explicit shape constraints land.
     fn run_same_element_type(&mut self, slots: &[usize]) -> Result<RelationResult, TypeError> {
         self.run_same_type(slots)
     }
@@ -483,10 +479,10 @@ impl TypeSolver {
         Ok(RelationResult::Defer)
     }
 
-    /// `BroadcastShape` - element types unify, output's shape is
-    /// the broadcast of the two inputs'. T4 simplification: defer
-    /// to element-type unification only (shape tracking lands in
-    /// T5).
+    /// `BroadcastShape` — element types unify, output's shape is
+    /// the broadcast of the two inputs'. Currently defers to
+    /// element-type unification only (shape tracking is not yet
+    /// implemented).
     fn run_broadcast_shape(&mut self, slots: &[usize]) -> Result<RelationResult, TypeError> {
         // slots[0] = in0, slots[1] = in1, slots[2] = out
         self.run_same_element_type(&[slots[0], slots[1], slots[2]])

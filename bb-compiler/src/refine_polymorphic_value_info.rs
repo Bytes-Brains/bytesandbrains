@@ -14,8 +14,6 @@
 //! Pass order: `refine_polymorphic_value_info` → `run_pipeline`
 //! (containing `type_solver`) → `validate_all_slots_bound`.
 //!
-//! See the polymorphic Contract-Storage design doc §4b for the
-//! full context.
 
 use std::collections::HashMap;
 
@@ -37,7 +35,7 @@ use bb_ir::types::TypeNode;
 /// If the resolved `BindingSlot` has empty `storage_types` (e.g. a
 /// hand-implemented concrete that didn't use `#[derive(bb::<Role>)]`),
 /// the denotation is left unchanged — no error is returned. This is the
-/// documented graceful-degradation path from Task 9.
+/// documented graceful-degradation path.
 pub(crate) fn refine_polymorphic_value_info(
     model: &mut ModelProto,
     spec: &BindingSpec,

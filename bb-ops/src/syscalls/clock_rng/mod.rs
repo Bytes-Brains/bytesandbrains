@@ -1,5 +1,4 @@
-//! Clock, RNG, sleep, deadline-match ops. //!
-//! Spec: Sub-F in `docs/IR_AND_DSL.md` §5a.
+//! Clock, RNG, sleep, and deadline-match syscalls.
 
 pub mod clock;
 pub mod deadline_match;

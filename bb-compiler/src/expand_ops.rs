@@ -1,12 +1,11 @@
-//! Pass 2 - `expand_ops`. Materialize op-variant choices per
-//! `docs/COMPILER.md` §5.
+//! `expand_ops` — materialize op-variant choices.
 //!
-//! Each `(domain, op_type)` that needs expansion has a matching
-//! arm in `lookup_expansion` returning the `ExpandFn` to apply.
-//! Plain `match` because the compiler runs at build time on a
-//! single thread - a table behind a sync primitive would be
-//! overkill, and a `match` makes the catalog trivially auditable.
-//! All expansions stamp `EXPANDED_KEY = "true"` for idempotence.
+//! Each `(domain, op_type)` that needs expansion has a matching arm
+//! in `lookup_expansion` returning the `ExpandFn` to apply. Plain
+//! `match` because the compiler runs at build time on a single
+//! thread — a table behind a sync primitive would be overkill, and
+//! a `match` makes the catalog trivially auditable. All expansions
+//! stamp `EXPANDED_KEY = "true"` for idempotence.
 
 use crate::error::CompileError;
 use bb_ir::proto::onnx::{
@@ -37,8 +36,7 @@ fn lookup_expansion(domain: &str, op_type: &str) -> Option<ExpandFn> {
     }
 }
 
-/// Expand ops in-place per the static expansion registry. Pure per
-/// COMPILER.md §3.2.
+/// Expand ops in-place per the static expansion registry. Pure.
 pub fn expand_ops(graph: &mut GraphProto) -> Result<(), CompileError> {
     for node in graph.node.iter_mut() {
         if metadata_value(node, EXPANDED_KEY).is_some() {

@@ -71,10 +71,9 @@ impl ConcreteComponent for CpuBackend {
     }
 }
 
-// Hand-rolled inventory carrier: CpuBackend doesn't go through
-// Hand-written equivalent of `#[derive(bb::Concrete)]`. Predates
-// the derive; left as-is to preserve the manual ConcreteComponent
-// impl above.
+// Hand-rolled equivalent of `#[derive(bb::Concrete)]` so the
+// manual `ConcreteComponent` impl above continues to drive inventory
+// registration.
 #[doc(hidden)]
 fn __cpu_backend_serialize(erased: &dyn bb_ir::component::ErasedComponent) -> Vec<u8> {
     let any: &dyn std::any::Any = erased;

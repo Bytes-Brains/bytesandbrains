@@ -84,9 +84,9 @@ pub struct Graph {
     formal_binding_stack: Vec<HashMap<String, Output>>,
 
     /// `(target_idx, name) → (handle, TypeNode)` for ports
-    /// registered via `output()`. Idempotent per the docs-plan
-    /// "single PassThrough producer per name" invariant.
-    /// `usize::MAX` indexes the root function.
+    /// registered via `output()`. Idempotent: at most one
+    /// PassThrough producer per name. `usize::MAX` indexes the
+    /// root function.
     named_output_types: HashMap<(usize, String), (Output, &'static TypeNode)>,
 }
 
@@ -703,8 +703,8 @@ pub fn attr_ints(name: &str, values: Vec<i64>) -> AttributeProto {
     }
 }
 
-/// Construct an `AttributeProto` of type `GRAPH`. Used by `If` /
-/// `Loop` body sub-graphs per `docs/IR_AND_DSL.md` Part 2 line 80.
+/// Construct an `AttributeProto` of type `GRAPH`. ONNX carries
+/// `If` / `Loop` body sub-graphs in `AttributeProto.g`.
 pub fn attr_graph(name: &str, value: bb_ir::proto::onnx::GraphProto) -> AttributeProto {
     AttributeProto {
         name: name.to_string(),

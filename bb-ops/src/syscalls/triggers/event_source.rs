@@ -1,11 +1,11 @@
 //! `EventSource` syscall - emits Trigger on bus events.
 //!
-//! Subscription wiring per IR_AND_DSL.md §5a + ENGINE.md §6 Phase 3:
-//! the Node install path parses each `EventSource` NodeProto's
-//! `kind` attribute and calls `Engine::register_event_subscription`
-//! so Phase 3's bus drain pushes the op onto the frontier when a
-//! matching event arrives. The op body fires the trigger output;
-//! repeated firings come from repeated event arrivals.
+//! Subscription wiring: the Node install path parses each
+//! `EventSource` NodeProto's `kind` attribute and calls
+//! `Engine::register_event_subscription` so the engine's bus drain
+//! pushes the op onto the frontier when a matching event arrives.
+//! The op body fires the trigger output; repeated firings come from
+//! repeated event arrivals.
 
 use bb_ir::proto::onnx::NodeProto;
 use bb_runtime::atomic::DispatchResult;

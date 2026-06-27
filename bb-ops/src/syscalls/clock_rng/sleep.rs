@@ -1,5 +1,5 @@
 //! `Sleep` syscall - schedules a `TimerKind::Sleep(cmd_id)` and
-//! returns `Async(cmd_id)`. Sub-F.
+//! returns `Async(cmd_id)`.
 
 use bb_ir::proto::onnx::NodeProto;
 use bb_runtime::atomic::DispatchResult;
@@ -30,8 +30,6 @@ pub fn invoke(
         .map(|a| a.i as u64)
         .unwrap_or(0);
     let now = ctx.time.scheduler.now_ns();
-    // mints a fresh CommandId via the global counter. Stage
-    // 8 may route through Node's ExecId allocator if needed.
     let cmd = ctx.allocate_command_id();
     ctx.time
         .scheduler

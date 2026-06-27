@@ -1,5 +1,4 @@
-//! Sub-F shared tests - exercise each invoke fn through the
-//! engine's register_syscall path.
+//! Shared tests for clock/RNG/sleep/deadline-match invoke fns.
 
 use bb_ir::proto::onnx::{attribute_proto, AttributeProto, NodeProto};
 use bb_runtime::atomic::DispatchResult;

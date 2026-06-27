@@ -17,8 +17,7 @@ pub(crate) struct ParsedDependency {
     pub slot: String,
 }
 
-/// PascalCase → snake_case for inventory helper fn idents. Matches
-/// the legacy `component!{}` helper naming to avoid collisions.
+/// PascalCase → snake_case for inventory helper fn idents.
 pub(crate) fn pascal_to_snake(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for (i, ch) in s.chars().enumerate() {
