@@ -46,8 +46,8 @@ tracing-otel = [
 test-components = []
 
 [dependencies]
-bb-ir            = { path = "../bb-ir", version = "0.3.7" }
-bb-derive        = { path = "../bb-derive", version = "0.3.7" }
+bb-ir            = { path = "../bb-ir", version = "0.3.8" }
+bb-derive        = { path = "../bb-derive", version = "0.3.8" }
 prost            = { workspace = true }
 tracing          = { workspace = true }
 serde            = { workspace = true }

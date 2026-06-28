@@ -40,14 +40,18 @@ use std::task::{Context, Poll, Waker};
 use bytesandbrains::placeholders::{DataLoaderSlot, ModelSlot};
 use bytesandbrains::{install, Address, Compiler, Config, Graph, Module, PeerId};
 
-/// A federated-learning client round. Pull a batch from the local
-/// dataset, run a forward pass through the bound model, and publish
-/// the locally-updated parameters for an aggregator to fold across
-/// peers in a later round.
-pub struct FederatedClient;
+/// A single-Node training step: pull a batch from the bound
+/// `DataSource`, run a forward pass through the bound `Model`, and
+/// emit the current parameters. No `g.net_out`, no aggregator, no
+/// peer selection — just the smallest end-to-end shape so you can
+/// drop your own `Model` + `DataSource` in and watch the lifecycle
+/// run. See `examples/federated_learning.rs` for the actual
+/// federated round (multi-Node, `g.net_out` partition, `FedAvg`
+/// aggregator, `GlobalRegistryClient` discovery).
+pub struct Quickstart;
 
-impl Module for FederatedClient {
-    fn name(&self) -> &str { "FederatedClient" }
+impl Module for Quickstart {
+    fn name(&self) -> &str { "Quickstart" }
     fn body(&self, g: &mut Graph) {
         let (batch, _labels) = DataLoaderSlot.next_batch(g);
         let _prediction      = ModelSlot.forward(g, batch);
@@ -61,22 +65,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `bb::Concrete` + `bb::Model` / `bb::DataSource` over your
     // types and implement the matching Contract trait. The compiler
     // binds them to named slots at compile time; the engine never
-    // sees the concrete types directly. See
-    // `examples/single_node_federated_learning.rs` for ~100 lines
-    // of minimal stubs you can copy.
+    // sees the concrete types directly. See `examples/quickstart.rs`
+    // for ~80 lines of minimal stubs you can copy.
     let compiled = Compiler::new()
         .bind_data_source::<MyDataLoader>("data_source")
         .bind_model::<MyModel>("model")
-        .compile(FederatedClient.build()?)?;
+        .compile(Quickstart.build()?)?;
 
     let peer = PeerId::from(0u64);
     let mut node = install(
         peer,
         vec![Address::empty().p2p(peer)],
         compiled,
-        &["FederatedClient"],
+        &["Quickstart"],
         Config::new(),
     )?;
+
+    // Empty slice fires every install-order bootstrap target;
+    // no-op when no Module overrides `Module::bootstrap`.
+    node.run_bootstrap(&[])?;
 
     // Drive the Node's poll loop on your runtime of choice.
     let waker  = Waker::noop();
