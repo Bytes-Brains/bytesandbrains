@@ -56,13 +56,11 @@ The same dispatch path runs whether the op fires from a `body`
 function or a `bootstrap` function — bootstrap is a regular
 `FunctionProto` whose body ops the engine seeds onto the frontier
 under a fresh `ExecId` when the host kicks the queue via
-`Node::run_bootstrap(BootstrapTarget::*)`. The per-component
-`is_op_locked` gate
-(`bb-runtime/src/engine/core.rs:1762-1806`) parks body-phase ops
-that touch any in-flight bootstrap's `ComponentRef` touch set
-until the bootstrap drains. Contract methods see identical
-`RuntimeResourceRef` semantics in either phase; `Later`
-completions land through the same ingress queue.
+`Node::run_bootstrap(&[...])`. The per-component `is_op_locked`
+gate parks body-phase ops that touch any in-flight bootstrap's
+`ComponentRef` touch set until the bootstrap drains. Contract
+methods see identical `RuntimeResourceRef` semantics in either
+phase; `Later` completions land through the same ingress queue.
 
 The dispatch path also does not change in the multi-target install
 case. `bb::install(.., targets: &[&str], ..)` deduplicates slot
@@ -250,67 +248,11 @@ Authors that need body-phase ordering against training place the
 every body op whose touched `ComponentRef` falls in the
 bootstrap's touch set, so `add` and `search` ops never observe
 an untrained index. The host kicks the recorded bootstrap with
-`node.run_bootstrap(BootstrapTarget::All)` before the body poll
-loop.
+`node.run_bootstrap(&[])` before the body poll loop.
 
 The error type's `Display` impl is what surfaces if the user calls
 `completion.complete(Err(e))` from the deferred path, or if the
 inline path returns `ContractResponse::Now(Err(e))`.
-
-## Bootstrap is just another Contract method
-
-`bb::Bootstrap::bootstrap(&mut self, &mut BootstrapCtx)`
-(`bb-runtime/src/contracts/bootstrap.rs:54-67`) is dispatched
-through the same per-T downcast bridge every other Contract
-method uses. `#[derive(bb::Concrete)]`
-(`bb-derive/src/roles.rs:21-79`) emits one of two impls per
-struct:
-
-1. **Default no-op.** A blanket `impl Bootstrap for #struct
-   { type Error = Infallible; }` so a Concrete with no
-   manual override participates in the Component bootstrap
-   dispatch path without boilerplate.
-2. **Override-respecting.** The derive sees
-   `#[bootstrap_override]` (`bb-derive/src/parse.rs:36-48`)
-   on the struct and skips the default impl so a hand-written
-   `impl Bootstrap for X { ... }` does not collide.
-
-In both cases the derive submits a
-`BootstrapDispatcherRegistration` inventory entry
-(`bb-runtime/src/registry.rs:170-208`) carrying a per-T
-registration callback that invokes
-`Engine::register_bootstrap_dispatcher::<T>()` against the
-engine. The install path
-(`src/install.rs:451-466`) walks the inventory and registers
-every Concrete's dispatcher before the first Component
-bootstrap fires — no per-call type lookup.
-
-At dispatch time, `Engine::dispatch_component_bootstrap`
-(`bb-runtime/src/engine/core.rs:1405-1432`) follows the same
-take-restore pattern `dispatch_atomic` uses:
-
-1. `take_component(cref)` moves the boxed concrete out of the
-   `Option<Box<dyn ErasedComponent>>` slot.
-2. The erased `&mut dyn Any` looks up its `TypeId` in
-   `bootstrap_dispatchers`.
-3. The matching `BootstrapDispatchFn`
-   (`bb-runtime/src/engine/invoke.rs:1019-1050`) downcasts
-   `&mut dyn Any → &mut T`, builds the `BootstrapCtx`,
-   invokes `T::bootstrap(&mut ctx)`, and translates
-   `Result<(), T::Error>` into the matching `DispatchResult`
-   (`Ok(())` → `Immediate(vec![])`; `Err(e)` carries the
-   `Display`ed error).
-4. `restore_component(cref, taken)` returns the concrete to
-   its slot before the next dispatch fires.
-
-The translation makes `Bootstrap` indistinguishable from any
-other Contract method on the engine side — `dispatch_atomic`,
-the Role dispatchers, and the Bootstrap dispatcher all run
-through the same erased-Any + TypeId-keyed lookup pattern. The
-only Bootstrap-specific bookkeeping is the engine's
-`bootstrap.in_flight` lock set, which the per-component
-`is_op_locked` gate consults to park body ops while the
-override runs.
 
 ## Per-role status
 

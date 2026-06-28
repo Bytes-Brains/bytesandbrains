@@ -11,42 +11,23 @@
 //! prompts without re-introspecting the engine.
 
 /// Errors surfaced by host-facing bootstrap staging methods on
-/// `Node`. F3 lands the Node API + validation logic; this commit
-/// defines the error taxonomy + display only.
+/// `Node`. Returned by [`crate::node::Node::run_bootstrap`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BootstrapError {
-    /// `run_bootstrap(BootstrapTarget::ModuleRequests|ModuleNames|Slots)`
-    /// named a target the engine has no bootstrap registration for.
-    /// Carries the queue snapshot so callers can present the legal set.
+    /// `run_bootstrap(&[BootstrapInput])` named a target the engine
+    /// has no bootstrap registration for. Carries the queue snapshot
+    /// so callers can present the legal set.
     UnknownTarget {
         /// Target name the caller supplied.
         target_name: String,
-        /// Target names currently queued, in install order.
+        /// Target names currently registered as Module bootstrap
+        /// targets, in install order.
         available: Vec<String>,
     },
 
-    /// `run_bootstrap(BootstrapTarget::Slots(...))` named a slot id
-    /// that does not exist on the target's input site map. Carries
-    /// the legal ids so callers can correct the mapping.
-    UnknownSlot {
-        /// Slot id the caller supplied.
-        slot_id: u32,
-        /// Slot ids declared on the target's input site map.
-        available: Vec<u32>,
-    },
-
-    /// The host called `run_bootstrap` with a target whose inputs are
-    /// already staged + queued. The host must drive the pending
-    /// request through to completion (or cancel it) before
-    /// re-targeting the same name.
-    AlreadyTransitivelyQueued {
-        /// Target name that was already queued.
-        target_name: String,
-    },
-
-    /// `run_bootstrap(BootstrapTarget::ModuleRequests(...))` named an
-    /// input the target does not declare as a formal. Carries the
-    /// declared set so callers can correct the request.
+    /// `run_bootstrap(&[BootstrapInput])` named an input the target
+    /// does not declare as a formal. Carries the declared set so
+    /// callers can correct the request.
     UnknownInput {
         /// Target name the request targeted.
         target_name: String,
@@ -56,9 +37,9 @@ pub enum BootstrapError {
         declared: Vec<String>,
     },
 
-    /// `run_bootstrap(BootstrapTarget::ModuleRequests(...))` is
-    /// missing a required formal input. Validation fails atomically —
-    /// no inputs stage when this fires.
+    /// `run_bootstrap(&[BootstrapInput])` is missing a required
+    /// formal input. Validation fails atomically — no inputs stage
+    /// when this fires.
     MissingInput {
         /// Target name the request targeted.
         target_name: String,
@@ -95,14 +76,6 @@ impl std::fmt::Display for BootstrapError {
             } => write!(
                 f,
                 "unknown bootstrap target '{target_name}'; available: {available:?}",
-            ),
-            Self::UnknownSlot { slot_id, available } => write!(
-                f,
-                "unknown bootstrap slot id {slot_id}; available: {available:?}",
-            ),
-            Self::AlreadyTransitivelyQueued { target_name } => write!(
-                f,
-                "bootstrap target '{target_name}' already has a queued input request",
             ),
             Self::UnknownInput {
                 target_name,

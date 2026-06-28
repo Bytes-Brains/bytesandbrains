@@ -58,7 +58,7 @@ use bytesandbrains::placeholders::{AggregatorSlot, DataLoaderSlot, ModelSlot};
 use bytesandbrains::proto::onnx::ModelProto;
 use bytesandbrains::runtime::RuntimeResourceRef;
 use bytesandbrains::syscall::values::PeerIdVecValue;
-use bytesandbrains::{install, Address, BootstrapTarget, Compiler, Config, Graph, Module, PeerId};
+use bytesandbrains::{install, Address, Compiler, Config, Graph, Module, PeerId};
 
 // ─── Constants ────────────────────────────────────────────────────
 
@@ -369,9 +369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // observes the first poll.
     let mut bootstrap_completes = 0usize;
     let mut total_steps = 0usize;
-    let boot_steps = node
-        .run_bootstrap(BootstrapTarget::All)
-        .expect("install-order kick");
+    let boot_steps = node.run_bootstrap(&[]).expect("install-order kick");
     for step in &boot_steps {
         if matches!(step, bytesandbrains::engine::EngineStep::BootstrapComplete) {
             bootstrap_completes += 1;

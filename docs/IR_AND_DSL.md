@@ -62,7 +62,7 @@ Each row cites the ONNX message and field the concept rides on.
 | **Node program** | `ModelProto` (proto §444) |
 | **Module** | `FunctionProto` (proto §933) with `(domain, name, overload)` identity, registered in `ModelProto.functions` (proto §516) |
 | **Module body** | `FunctionProto.node: repeated NodeProto` (proto §963) |
-| **Module bootstrap** | A sibling `FunctionProto` named `"<module>__bootstrap"`, stamped `metadata_props["ai.bytesandbrains.module_phase"] = "bootstrap"`. Recorded by `Module::bootstrap(&self, g)` next to `Module::body`. Install registers it on `BootstrapState::install_order` (`bb-runtime/src/engine/bootstrap.rs:376-392`) without arming the queue; the host kicks via `Node::run_bootstrap(BootstrapTarget)` (`bb-runtime/src/node/mod.rs:723-749`) — variants `BootstrapTarget::All` drive every install-order target, `ModuleNames(&[&str])` / `ModuleRequests(&[BootstrapRequest])` drive specific Module targets (the latter staging input formals), and `Slots(&[&str])` drives Component bootstraps. The engine seeds bootstrap bodies onto the frontier under a fresh `ExecId`; the per-component `is_op_locked` gate (`bb-runtime/src/engine/core.rs:1762-1806`) parks body ops touching any in-flight bootstrap's `ComponentRef` touch set until the bootstrap drains. See ENGINE.md §6.8. |
+| **Module bootstrap** | A sibling `FunctionProto` named `"<module>__bootstrap"`, stamped `metadata_props["ai.bytesandbrains.module_phase"] = "bootstrap"`. Recorded by `Module::bootstrap(&self, g)` next to `Module::body`. Install registers it on `BootstrapState::install_order` without arming the queue; the host kicks via `Node::run_bootstrap(&[BootstrapInput, ...])` — empty slice drives every install-order target with empty inputs, non-empty slice drives the named Module targets and stages each request's input formals. The engine seeds bootstrap bodies onto the frontier under a fresh `ExecId`; the per-component `is_op_locked` gate parks body ops touching any in-flight bootstrap's `ComponentRef` touch set until the bootstrap drains. See ENGINE.md §6.8. |
 | **Module typed I/O** | `FunctionProto.input/output: repeated string` (proto §949–950) + `FunctionProto.value_info: repeated ValueInfoProto` (proto §994) |
 | **Sub-module call** | `NodeProto { op_type: <function_name>, domain: <function_domain> }` in parent body; the runtime resolves `(domain, op_type)` against `ModelProto.functions` per ONNX's standard model-local-function rule (proto §502–516) |
 | **Generic component placeholder** (`Backend`, `Model`, …) | `FunctionProto.attribute: repeated string` (proto §954) — required attribute name; the framework requires a binding at load |
@@ -1220,9 +1220,11 @@ body.
 
 `Module::bootstrap(&self, g: &mut Graph)` is the author entry
 point for pre-body initialization. The trait method defaults to
-no-op
-(`bb-dsl/src/module.rs`); authors override it next to
-`Module::body`:
+no-op; authors override it next to `Module::body` and compose
+their initialization graph the same way they compose `Module::body`.
+Components contribute ops (`GlobalRegistryClient::Announce`,
+`Index::train`, `BackendSlot::prime`, …) that the Module's
+bootstrap orchestrates.
 
 ```rust
 impl Module for VectorStore {
@@ -1231,7 +1233,7 @@ impl Module for VectorStore {
         // call body uses for top-level formals. Each input
         // becomes a declared formal on the emitted
         // `"<module>__bootstrap"` FunctionProto, addressable from
-        // the host via `BootstrapRequest::inputs`.
+        // the host via `BootstrapInput::inputs`.
         let seed_corpus = g.input("seed_corpus");
         let _ = self.index.train(g, seed_corpus);
     }
@@ -1250,36 +1252,37 @@ impl Module for VectorStore {
 the recorder's seen `g.input(name)` calls inside the bootstrap
 recording, in order.
 
-The host stages bytes for each declared formal via the F5
-immediate-fire entry point:
+DSL helpers like `bytesandbrains::constant(g, label, type_node,
+data_type)` (typed bootstrap-stage constants the compiler folds
+through `expand_constant`) and `bytesandbrains::announce(g,
+server_peer)` (`GlobalRegistryClient::Announce` recording with
+auto-supplied local addresses + heartbeat throttle) keep common
+bootstrap patterns one call wide.
+
+The host stages bytes for each declared formal through
+`Node::run_bootstrap`:
 
 ```rust
-node.run_bootstrap(bb::engine::BootstrapTarget::ModuleRequests(&[
-    bb::engine::BootstrapRequest {
-        target: "VectorStore",
-        inputs: &[("seed_corpus", corpus_bytes.as_slice())],
-    },
-]))?;
+node.run_bootstrap(&[bb::engine::BootstrapInput {
+    target: "VectorStore",
+    inputs: &[("seed_corpus", corpus_bytes.as_slice())],
+}])?;
 node.poll(cx); // drives the bootstrap body to quiescence
 ```
 
 The engine validates `inputs` against the target's declared
-formals at the boundary (`bb-runtime/src/engine/core.rs:1488-1528`):
-`UnknownInput` rejects extras, `MissingInput` rejects gaps,
-`UnknownTarget` rejects unknown names — all before any bytes
-stage. Validated requests follow the Principle 1a copy
-(`try_charge → try_reserve_exact → extend_from_slice`,
-`bb-runtime/src/engine/core.rs:1534-1567`) and the framework-owned
-`BytesValue` carriers land in the bootstrap's slot table entries
-at the body's fresh `ExecId`. Caller's borrowed `&[u8]` slices
-may drop the moment `run_bootstrap` returns.
+formals at the boundary: `UnknownInput` rejects extras,
+`MissingInput` rejects gaps, `UnknownTarget` rejects unknown
+names — all before any bytes stage. Validated requests follow the
+Principle 1a copy (`try_charge → try_reserve_exact →
+extend_from_slice`) and the framework-owned `BytesValue` carriers
+land in the bootstrap's slot table entries at the body's fresh
+`ExecId`. Caller's borrowed `&[u8]` slices may drop the moment
+`run_bootstrap` returns.
 
 A bootstrap that takes no formals records zero `g.input` calls;
-the host kicks it via `Node::run_bootstrap(BootstrapTarget::All)`
-(every install-order bootstrap, no inputs needed) or
-`Node::run_bootstrap(BootstrapTarget::ModuleNames(&["<target>"]))`
-(sugar for empty-input batch). Component bootstraps fire via
-`BootstrapTarget::Slots(&["<slot>"])`.
+the host kicks every install-order target with
+`node.run_bootstrap(&[])`.
 
 ### Composition API
 

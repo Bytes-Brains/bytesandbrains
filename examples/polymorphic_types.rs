@@ -13,11 +13,15 @@
 //! cargo run --example polymorphic_types
 //! ```
 //!
-//! The example is purely illustrative — no Module, no Node. It
-//! exercises the type-system surfaces directly so the output
-//! reads like a guided tour of what the type system produces.
+//! The example exercises the type-system surfaces directly so the
+//! output reads like a guided tour of what the type system
+//! produces. The polymorphic graph fed to the TypeSolver is
+//! recorded through the regular `Module::build` recorder — every
+//! NodeProto originates from a `BackendSlot` DSL helper, not from
+//! a struct literal.
 
 use bytesandbrains::ops::backends::cpu::{tensor::CpuTensor, CpuBackend};
+use bytesandbrains::placeholders::BackendSlot;
 use bytesandbrains::slot_value::SlotValue;
 use bytesandbrains::syscall::values::{BytesValue, PeerIdValue, TriggerValue};
 use bytesandbrains::types::{
@@ -27,12 +31,47 @@ use bytesandbrains::types::{
 
 use bytesandbrains::atomic::{AtomicOpDecl, AtomicOpKind};
 use bytesandbrains::compiler::TypeSolver;
-use bytesandbrains::proto::onnx::{
-    FunctionProto, GraphProto, ModelProto, NodeProto, ValueInfoProto,
-};
+use bytesandbrains::proto::function_to_graph_view;
+use bytesandbrains::proto::onnx::ModelProto;
+use bytesandbrains::{Graph, Module};
 
 fn header(label: &str) {
     println!("\n─── {label} ───────────────────────────────────────");
+}
+
+/// Records `z = Add(x, y); w = Relu(z)` through `BackendSlot`. The
+/// solver runs against the resulting `FunctionProto` — same shape
+/// as a literal-built `GraphProto`, but every NodeProto comes from
+/// the DSL recorder.
+struct AddReluDemo;
+
+impl Module for AddReluDemo {
+    fn name(&self) -> &str {
+        "AddReluDemo"
+    }
+    fn body(&self, g: &mut Graph) {
+        let x = g.input("x");
+        let y = g.input("y");
+        let z = BackendSlot.add(g, x, y);
+        let w = BackendSlot.relu(g, z);
+        g.output("w", w);
+    }
+}
+
+/// Records `y = Relu(x); z = Add(y, y)` through `BackendSlot`. The
+/// resulting `ModelProto` is fed straight into `stamp_for_test`.
+struct StampDemo;
+
+impl Module for StampDemo {
+    fn name(&self) -> &str {
+        "demo"
+    }
+    fn body(&self, g: &mut Graph) {
+        let x = g.input("x");
+        let y = BackendSlot.relu(g, x);
+        let z = BackendSlot.add(g, y.clone(), y);
+        g.output("z", z);
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -107,28 +146,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── 4. TypeSolver: seed an input, watch it propagate ────────
     header("Step 4: TypeSolver propagating through a graph");
-    let graph = GraphProto {
-        input: vec![value_info("x"), value_info("y")],
-        node: vec![
-            // z = Add(x, y)    - all share an element type
-            NodeProto {
-                op_type: "Add".into(),
-                domain: "ai.onnx".into(),
-                input: vec!["x".into(), "y".into()],
-                output: vec!["z".into()],
-                ..Default::default()
-            },
-            // w = Relu(z)       - elementwise; output mirrors input
-            NodeProto {
-                op_type: "Relu".into(),
-                domain: "ai.onnx".into(),
-                input: vec!["z".into()],
-                output: vec!["w".into()],
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
-    };
+    let recorded: ModelProto = AddReluDemo.build()?;
+    let body_fn = recorded
+        .functions
+        .first()
+        .expect("Module::build emits body");
+    let graph = function_to_graph_view(body_fn);
+    // The DSL allocates fresh names for op outputs — pick them up
+    // from the recorded NodeProtos so the demo prints the same
+    // names the solver sees.
+    let add_out = body_fn.node[0].output[0].clone();
+    let relu_out = body_fn.node[1].output[0].clone();
     let decl_for_op = |domain: &str, op_type: &str| -> Option<&'static AtomicOpDecl> {
         match (domain, op_type) {
             ("ai.onnx", "Add") => Some(&ADD_DECL),
@@ -140,9 +168,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     solver.seed("x", &TYPE_TENSOR_F32);
     let solution = solver.solve()?;
     println!("  seed: x = tensor.f32");
-    for value in ["x", "y", "z", "w"] {
+    for (label, value) in [
+        ("x", "x"),
+        ("y", "y"),
+        ("Add output", add_out.as_str()),
+        ("Relu output", relu_out.as_str()),
+    ] {
         let t = solution.type_of(value).expect("solver resolved");
-        println!("  resolved: {value} → {}", t.id);
+        println!("  resolved: {label:11} → {}", t.id);
     }
 
     // Demonstrate the diagonal-variable rule: conflicting concretes fail.
@@ -157,29 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── 5. Proto-at-every-boundary: pass through stamp_for_test ──
     header("Step 5: stamp_for_test emits the compilation passport");
-    let mut model = ModelProto {
-        functions: vec![FunctionProto {
-            name: "demo".into(),
-            node: vec![
-                NodeProto {
-                    op_type: "Relu".into(),
-                    domain: "ai.onnx".into(),
-                    input: vec!["x".into()],
-                    output: vec!["y".into()],
-                    ..Default::default()
-                },
-                NodeProto {
-                    op_type: "Add".into(),
-                    domain: "ai.onnx".into(),
-                    input: vec!["y".into(), "y".into()],
-                    output: vec!["z".into()],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
+    let mut model: ModelProto = StampDemo.build()?;
     bytesandbrains::compiler::stamp_for_test(
         &mut model,
         &[("default_backend", "Backend", "CpuBackend")],
@@ -204,13 +215,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn value_info(name: &str) -> ValueInfoProto {
-    ValueInfoProto {
-        name: name.to_string(),
-        ..Default::default()
-    }
-}
-
 static RELU_DECL: AtomicOpDecl = AtomicOpDecl {
     name: "Relu",
     inputs: &[],
@@ -221,7 +225,3 @@ static RELU_DECL: AtomicOpDecl = AtomicOpDecl {
         output: PortRef::Output(0),
     }],
 };
-
-fn _bring_value_info_to_scope() {
-    let _ = ValueInfoProto::default;
-}

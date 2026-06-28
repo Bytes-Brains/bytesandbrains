@@ -22,12 +22,8 @@ mod roles;
 // --- Concrete + 8 Role derives -------------------------------------
 
 /// `#[derive(bb::Concrete)]` — emits the universal
-/// `ConcreteComponent + AnyComponent + inventory::submit!` triple
-/// plus a default `Bootstrap` Contract impl that uses the trait's
-/// no-op default and a `BootstrapDispatcherRegistration` inventory
-/// entry so the engine's Component bootstrap fire path can dispatch
-/// against the concrete without a manual `register_bootstrap_dispatcher`
-/// call. Pair with one or more `#[derive(bb::<Role>)]` derives for
+/// `ConcreteComponent + AnyComponent + inventory::submit!` triple.
+/// Pair with one or more `#[derive(bb::<Role>)]` derives for
 /// role-trait bridges.
 ///
 /// `#[depends(<role> = "<slot>", ...)]` entries (role is one of
@@ -35,13 +31,7 @@ mod roles;
 /// peer_selector | backend | protocol`) surface as
 /// `ConcreteComponent::DEPENDENCIES` for compile-time slot
 /// verification. Multiple attributes stack.
-///
-/// `#[bootstrap_override]` suppresses the default Bootstrap impl
-/// emission so the author can hand-write `impl Bootstrap for X`
-/// with a real `bootstrap()` override without colliding with the
-/// derive's default. The dispatcher registration still emits — it
-/// routes through the user's manual impl.
-#[proc_macro_derive(Concrete, attributes(depends, bootstrap_override))]
+#[proc_macro_derive(Concrete, attributes(depends))]
 #[allow(non_snake_case)]
 pub fn Concrete(input: TokenStream) -> TokenStream {
     let derive_input = parse_macro_input!(input as DeriveInput);

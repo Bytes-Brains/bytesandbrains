@@ -33,19 +33,6 @@ fn role_ident_to_canonical(role: &Ident) -> std::result::Result<&'static str, sy
     })
 }
 
-/// `true` when the struct carries `#[bootstrap_override]` — the
-/// opt-out marker telling `#[derive(bb::Concrete)]` to skip the
-/// default `impl Bootstrap for Self` emission so the author can
-/// hand-write their own `impl Bootstrap` without colliding with
-/// the derive's default no-op. The Bootstrap dispatcher
-/// inventory entry still emits — it just routes through the
-/// user's manual impl.
-pub(crate) fn has_bootstrap_override(attrs: &[Attribute]) -> bool {
-    attrs
-        .iter()
-        .any(|a| a.path().is_ident("bootstrap_override"))
-}
-
 /// Parse every `#[depends(role = "slot", ...)]` attribute on a
 /// struct. Multiple attributes stack; non-matching paths are skipped.
 pub(crate) fn parse_depends_attrs(

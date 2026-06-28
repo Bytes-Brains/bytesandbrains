@@ -1008,22 +1008,19 @@ is the boundary itself.
 
 ### 6.8 Host-driven bootstrap entry
 
-Bootstrap is the framework's pre-body initialization phase.
-Install records every `module_phase = "bootstrap"` FunctionProto
-(authored via `Module::bootstrap`, see
-[IR_AND_DSL.md §2](IR_AND_DSL.md#part-2--concept-to-proto-mapping))
-and every Component-level `Bootstrap` impl
-(authored via the `bb::Bootstrap` Contract, see
-[ROLES.md §Bootstrap](ROLES.md#part-11--bbbootstrap))
-onto the engine without arming the queue. **The host owns when
-bootstrap fires** — `Engine::poll` no longer auto-seeds
-(`bb-runtime/src/engine/poll.rs:170-180`); the body-op gate stays
-dormant until the host calls `Node::run_bootstrap(target)`.
+Bootstrap is a graph the user composes inside `Module::bootstrap`.
+Components contribute ops the user records (`GlobalRegistryClient::Announce`,
+`Index::train`, `BackendSlot::prime`, …); the Module's bootstrap function
+orchestrates them into one `FunctionProto` per Module. Install records
+every `module_phase = "bootstrap"` FunctionProto
+(see [IR_AND_DSL.md §2](IR_AND_DSL.md#part-2--concept-to-proto-mapping))
+onto the engine without arming the queue. The host owns when bootstrap
+fires — `Engine::poll` does not auto-seed; the body-op gate stays
+dormant until the host calls `Node::run_bootstrap`.
 
-#### 6.8.1 `BootstrapState` — single owner of bootstrap fields
+#### 6.8.1 `BootstrapState`
 
-Engine consolidates every bootstrap field into a single struct
-(`bb-runtime/src/engine/bootstrap.rs:244-299`):
+Engine consolidates every bootstrap field into a single struct:
 
 ```rust
 pub(crate) struct BootstrapState {
@@ -1031,20 +1028,17 @@ pub(crate) struct BootstrapState {
     /// when a `module_phase = bootstrap` FunctionProto lands.
     module_bootstraps: HashMap<String, ModuleBootstrap>,
 
-    /// Per-slot Component bootstrap metadata. Populated by the
-    /// `BootstrapDispatcherRegistration` install walk.
-    component_bootstraps: HashMap<String, ComponentBootstrap>,
-
     /// Append-only sequence of Module bootstrap target names in
-    /// install order. The seeder walks front-to-back.
+    /// install order. The seeder walks front-to-back when the
+    /// host kicks an empty-slice run.
     install_order: Vec<String>,
 
     /// Host-supplied bootstrap input staging requests parked
     /// awaiting a conflict-free slot.
-    pending_requests: VecDeque<OwnedBootstrapRequest>,
+    pending_requests: VecDeque<OwnedBootstrapInput>,
 
     /// Currently executing bootstraps. Vec shape supports
-    /// concurrent disjoint Component bootstraps.
+    /// concurrent disjoint Module bootstraps.
     in_flight: Vec<InFlightBootstrap>,
 
     /// Validated + staged bootstraps ready to fire once
@@ -1061,172 +1055,123 @@ pub(crate) struct BootstrapState {
 }
 ```
 
-Replaces the prior `bootstrap_function_keys` /
-`bootstrap_next_idx` / `bootstrap_pending` / `bootstrap_exec_id`
-quartet. Every read + write of bootstrap state goes through
-`BootstrapState`; the engine borrows it as one field.
+Every read + write of bootstrap state goes through `BootstrapState`;
+the engine borrows it as one field.
 
-#### 6.8.2 Host kick — single entry point + `BootstrapTarget`
+#### 6.8.2 Host kick — `Node::run_bootstrap`
 
-One public method on `Node` drives every bootstrap path; the
-caller selects what fires through a `BootstrapTarget` enum
-(`bb-runtime/src/node/mod.rs`):
+One public method on `Node` drives every bootstrap path; the caller
+selects what fires through the `inputs` slice:
 
 ```rust
-pub enum BootstrapTarget<'a> {
-    /// Drive every install-order Module bootstrap target on this Node.
-    All,
-    /// Drive specific Module bootstrap targets by name (with empty inputs).
-    ModuleNames(&'a [&'a str]),
-    /// Drive Module bootstrap targets with explicit inputs.
-    ModuleRequests(&'a [BootstrapRequest<'a>]),
-    /// Drive Component bootstraps by slot name.
-    Slots(&'a [&'a str]),
-}
-
 impl Node {
     /// Drive bootstrap targets to completion. Returns the full
     /// `Vec<EngineStep>` the bootstrap path emitted; idempotent on
     /// a Node whose queue already drained (returns an empty Vec).
+    ///
+    /// Empty slice fires every install-order target with empty
+    /// inputs; non-empty slice fires only the named targets, staging
+    /// each request's input bytes into the target's declared
+    /// formals.
     pub fn run_bootstrap(
         &mut self,
-        target: BootstrapTarget<'_>,
+        inputs: &[BootstrapInput<'_>],
     ) -> Result<Vec<EngineStep>, BootstrapError>;
 
     /// Inspect bootstrap state without triggering anything.
     pub fn bootstrap_status(&self) -> BootstrapStatus;
 }
+
+pub struct BootstrapInput<'a> {
+    pub target: &'a str,
+    pub inputs: &'a [(&'a str, &'a [u8])],
+}
 ```
 
-Per-variant semantics:
+Semantics by slice shape:
 
-- **`BootstrapTarget::All`** — arm the install-order queue, seed
-  the first target, drive `Engine::poll` in a loop until every
-  queued bootstrap drains (or one suspends on async). The
-  canonical "kick the install-order queue" call after
-  `bb::install`.
-- **`BootstrapTarget::ModuleNames(&["A", "B"])`** — batch entry
-  for Module bootstraps that take no input formals; each name
-  stages an empty-input request before firing.
-- **`BootstrapTarget::ModuleRequests(&[BootstrapRequest])`** —
-  batch entry for Module bootstraps with input formals. Each
-  `BootstrapRequest { target: &str, inputs: &[(&str, &[u8])] }`
-  stages owned-form bytes into the target's input sites via the
-  F5 immediate-fire path. Validates atomically up-front
-  (unknown target / duplicate batch entry surfaces
-  `BootstrapError::{UnknownTarget, AlreadyTransitivelyQueued}`
-  before any staging happens).
-- **`BootstrapTarget::Slots(&["compute"])`** — fire Component
-  bootstraps by slot name. Resolves `slot → ComponentRef` via
-  the `bootstrap.component_bootstraps` registry the install
-  walk populated; dispatches through the registered `Bootstrap`
-  dispatcher.
+- **Empty slice (`&[]`)** — arm the install-order queue, seed the
+  first target, drive `Engine::poll` in a loop until every queued
+  bootstrap drains (or one suspends on async). The canonical kick
+  after `bb::install` for Modules whose bootstraps take no input
+  formals.
+- **Non-empty slice (`&[BootstrapInput, …]`)** — fire each named
+  Module bootstrap with the supplied input bytes. The slice form
+  is the re-bootstrap entry point for a single Module already
+  drained and any first-time fire that needs input formals. Validates
+  atomically up-front (unknown target / duplicate batch entry
+  surfaces `BootstrapError::{UnknownTarget, AlreadyTransitivelyQueued}`
+  before any staging happens). Empty-input requests
+  (`BootstrapInput { target, inputs: &[] }`) are valid for targets
+  whose bootstrap declares no formals.
 
-`enqueue_bootstrap_request` is `pub(crate)` only — the engine's
-input-staging helper, not a user-facing surface. Authors compose
-multi-input bootstraps through `BootstrapTarget::ModuleRequests`,
-which runs the Principle 1a copy on each `(input_name, &[u8])`
-pair before pushing the body's `OpRef`s onto the frontier.
+Validated inputs follow the Principle 1a copy
+(`try_charge → try_reserve_exact → extend_from_slice`) before the
+framework-owned `BytesValue` carriers land in the bootstrap's slot
+table at the body's fresh `ExecId`. The caller's borrowed `&[u8]`
+slices may drop the moment `run_bootstrap` returns.
 
-#### 6.8.3 Component-level invocation path
+#### 6.8.3 Body-op gate — `is_op_locked`
 
-Component bootstraps fire as a synthetic single-op dispatch.
-`Engine::fire_component_bootstrap`
-(`bb-runtime/src/engine/core.rs:1319-1397`) resolves
-`slot → ComponentRef`, allocates a fresh `ExecId`, locks the
-`{cref}` touch set on `bootstrap.in_flight`, and invokes
-`Bootstrap::bootstrap(&mut ctx)` through the per-T dispatcher
-registry (`bb-runtime/src/engine/invoke.rs:1019-1050`). The
-`#[derive(bb::Concrete)]` macro emits the dispatcher registration
-automatically via the `BootstrapDispatcherRegistration` inventory
-carrier (`bb-runtime/src/registry.rs:170-208`,
-`bb-derive/src/roles.rs:46-79`); see
-[CONTRACT_DISPATCH.md](CONTRACT_DISPATCH.md#bootstrap-is-just-another-contract-method)
-for the bridge.
+The body-op gate (`Engine::is_op_locked`) parks any body op whose
+touched `ComponentRef` falls inside some in-flight bootstrap's
+`touch_set` while `BootstrapState::pending` is set. Disjoint
+components keep firing.
 
-Synchronous `DispatchResult::Immediate(_)` retires the in-flight
-entry inline via `BootstrapState::on_bootstrap_drained` and fires
-any promoted waiters whose touch set no longer conflicts
-(`bb-runtime/src/engine/core.rs:1356-1366`).
-`DispatchResult::Async(cmd_id)` parks the ExecId on
-`pending_async` under a synthetic `OpRef`
-(`OpRef::pack(u32::MAX, 0)`) so the regular `handle_completion`
-path drives the eventual drain
-(`bb-runtime/src/engine/core.rs:1368-1386`).
+Resolution order:
 
-#### 6.8.4 Per-component gate — `is_op_locked`
-
-The body-op gate (`Engine::is_op_locked`,
-`bb-runtime/src/engine/core.rs:1762-1806`) parks any body op
-whose touched `ComponentRef` falls inside some in-flight
-bootstrap's `touch_set`. Disjoint components keep firing.
-
-Resolution order (per the docstring at
-`bb-runtime/src/engine/core.rs:1743-1761`):
-
-1. No in-flight bootstraps → fire (gate dormant).
-2. `exec_id` descends from some in-flight bootstrap's ExecId
-   via the `pending_calls.parent_exec_id` chain → fire. The
-   bootstrap body itself and its sub-FunctionCalls invoke ops
-   freely.
+1. `bootstrap.pending` is `false` → fire (gate dormant on idle).
+2. `exec_id` descends from some in-flight bootstrap's ExecId via
+   the `pending_calls.parent_exec_id` chain → fire. The bootstrap
+   body itself and its sub-FunctionCalls invoke ops freely.
 3. Resolve the touched `ComponentRef` from the op's NodeProto via
    `SLOT_ID_KEY → slot_id_to_cref`. If the touched cref is in
    some in-flight bootstrap's `touch_set` → park. Stateless
    syscalls (no slot_id stamp, no role binding) fire because
    they reach no component.
 
-`pop_frontier_fireable` (`bb-runtime/src/engine/core.rs:2096-2110`)
-scans the frontier for the first entry the gate accepts; parked
-ops stay on the frontier until the in-flight set drops.
+`pop_frontier_fireable` scans the frontier for the first entry the
+gate accepts; parked ops stay on the frontier until the in-flight
+set drops.
 
 The touch set is the closure of every `ComponentRef` referenced
 by the bootstrap function body (slot-id NodeProtos + transitive
 FunctionCalls), computed once at install time by
-`Engine::compute_touch_set`
-(`bb-runtime/src/engine/core.rs:1145-1196`) — see
+`Engine::compute_touch_set` — see
 [COMPILER.md §Touch-set computation](COMPILER.md#touch-set-computation).
 
-#### 6.8.5 Conflict queue + concurrent in-flight bootstraps
+#### 6.8.4 Conflict queue + concurrent in-flight bootstraps
 
-`BootstrapState::process_pending_requests`
-(`bb-runtime/src/engine/bootstrap.rs:459-497`) drains the parked
-request queue once per poll. For each request the engine looks
-up the target's touch set and compares against every currently
-in-flight bootstrap's `touch_set`. Disjoint targets surface as
-`ReadyBootstrap`s the engine seeds immediately; overlapping ones
-park as `QueuedBootstrap`s in `bootstrap.waiting`.
+`BootstrapState::process_pending_requests` drains the parked request
+queue once per poll. For each request the engine looks up the
+target's touch set and compares against every currently in-flight
+bootstrap's `touch_set`. Disjoint targets surface as `ReadyBootstrap`s
+the engine seeds immediately; overlapping ones park as
+`QueuedBootstrap`s in `bootstrap.waiting`.
 
-`BootstrapState::on_bootstrap_drained`
-(`bb-runtime/src/engine/bootstrap.rs:499-522`) retires the
-in-flight entry by ExecId, then walks `waiting` once and promotes
-any waiter whose touch set no longer conflicts.
-`Engine::maybe_complete_bootstrap`
-(`bb-runtime/src/engine/core.rs:1824-1887`) is the call site —
-it runs after every drain phase, advances `next_idx`, and fires
-promoted waiters in-cycle so the host sees every
-`BootstrapComplete` step and the body's first ops in a single
-poll when the budget permits.
+`BootstrapState::on_bootstrap_drained` retires the in-flight entry
+by ExecId, then walks `waiting` once and promotes any waiter whose
+touch set no longer conflicts. `Engine::maybe_complete_bootstrap` is
+the call site — it runs after every drain phase, advances `next_idx`,
+and fires promoted waiters in-cycle so the host sees every
+`BootstrapComplete` step and the body's first ops in a single poll
+when the budget permits.
 
-#### 6.8.6 Lifecycle status
+#### 6.8.5 Lifecycle status
 
 `Node::bootstrap_status()` returns
-`BootstrapStatus::{Idle, Running, WaitingForInput}`
-(`bb-runtime/src/engine/bootstrap.rs:114-128`) without advancing
+`BootstrapStatus::{Idle, Running, WaitingForInput}` without advancing
 any queue. `Running` means at least one entry occupies
 `bootstrap.in_flight`; `WaitingForInput` means the install-order
 queue still has unseeded targets or host-staged requests sit on
-`pending_requests` / `waiting`; `Idle` otherwise. The host
-consults this when deciding whether to call `run_bootstrap` again
-with `ModuleRequests` to stage more inputs, or to move on to the
-body poll loop.
+`pending_requests` / `waiting`; `Idle` otherwise. The host consults
+this when deciding whether to call `run_bootstrap` again with another
+input slice or to move on to the body poll loop.
 
 The engine surfaces per-target completions as
 `EngineStep::BootstrapComplete` and async suspensions as
-`EngineStep::WaitingOnBootstrap`
-(`bb-runtime/src/engine/step.rs:60-75`,
-`bb-runtime/src/engine/poll.rs:450-470`). Each target's
-bootstrap emits one `BootstrapComplete` step in install order
-before the next seeds.
+`EngineStep::WaitingOnBootstrap`. Each target's bootstrap emits one
+`BootstrapComplete` step in install order before the next seeds.
 
 ---
 
@@ -1812,7 +1757,7 @@ impl Node {
     pub fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Vec<EngineStep>>;
 
     // — Drive bootstrap —
-    pub fn run_bootstrap(&mut self, target: BootstrapTarget<'_>)
+    pub fn run_bootstrap(&mut self, inputs: &[BootstrapInput<'_>])
         -> Result<Vec<EngineStep>, BootstrapError>;
     pub fn bootstrap_status(&self) -> BootstrapStatus;
 

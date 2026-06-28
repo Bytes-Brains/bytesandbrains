@@ -37,9 +37,7 @@ use std::task::{Context, Waker};
 
 use bytesandbrains::placeholders::{AggregatorSlot, DataLoaderSlot, ModelSlot};
 use bytesandbrains::proto::onnx::ModelProto;
-use bytesandbrains::{
-    Address, BootstrapTarget, Compiler, Graph, IngressEvent, Module, Node, PeerId,
-};
+use bytesandbrains::{Address, Compiler, Graph, IngressEvent, Module, Node, PeerId};
 
 use common::{Bus, StubAggregator, StubLoader, StubModel};
 
@@ -248,8 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // immediately, but it still transitions each partition into the
     // body-ready state the engine expects.
     for (_, node, _) in &mut nodes {
-        node.run_bootstrap(BootstrapTarget::All)
-            .expect("install-order kick");
+        node.run_bootstrap(&[]).expect("install-order kick");
     }
 
     println!("─── STEP 6: Drive the source partition's `sink_peers` input");

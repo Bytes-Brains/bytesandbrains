@@ -155,15 +155,6 @@ pub struct Engine {
     /// `invoke_atomic` via direct HashMap lookup (no linear scan).
     pub(crate) role_dispatchers: HashMap<std::any::TypeId, RoleDispatcher>,
 
-    /// Concrete-type `Bootstrap` dispatchers, indexed by
-    /// `TypeId::of::<T>()`. Populated by
-    /// [`Engine::register_bootstrap_dispatcher`] at install time and
-    /// consulted by `fire_component_bootstrap` to dispatch the
-    /// synthetic single-op against the bound Component's
-    /// [`crate::contracts::bootstrap::Bootstrap::bootstrap`] impl.
-    pub(crate) bootstrap_dispatchers:
-        HashMap<std::any::TypeId, crate::engine::invoke::BootstrapDispatchFn>,
-
     // --- Generic slot registry -------------------------------------
     /// Slot-name → `ComponentRef` registry. Generic over component
     /// role: indexes EVERY bound Component (backends, indexes,
@@ -284,7 +275,6 @@ impl Engine {
             phase1_pre_drain_depth: 0,
             bootstrap: crate::engine::bootstrap::BootstrapState::new(),
             role_dispatchers: HashMap::new(),
-            bootstrap_dispatchers: HashMap::new(),
             slots: HashMap::new(),
             component_roles: HashMap::new(),
             cycle_op_budget: crate::node::DEFAULT_CYCLE_OP_BUDGET,
@@ -334,8 +324,8 @@ impl Engine {
         // `install_order` + `module_bootstraps` stay populated for
         // introspection (multi-target installs surface every queued
         // target via [`Self::bootstrap_function_keys`]); `pending`,
-        // `in_flight`, `pending_requests`, `waiting`, and `next_idx`
-        // reset so `Node::run_bootstrap` is a no-op on a restored Node —
+        // `current_exec_id`, and `next_idx` reset so
+        // `Node::run_bootstrap` is a no-op on a restored Node —
         // bumping the index to the end of `install_order` keeps the
         // seeder from re-firing if the host nonetheless polls.
         self.bootstrap.clear_for_restore();
@@ -700,40 +690,6 @@ impl Engine {
         );
     }
 
-    /// Register a `Bootstrap` dispatcher. The `Bootstrap` Contract
-    /// method dispatches through this entry — keyed on `TypeId::of::<T>()`
-    /// so the engine's `fire_ready_bootstrap` Component arm reaches
-    /// the concrete `T::bootstrap` impl via downcast without scanning
-    /// the registry. The derive bridge in F5 emits the call to this
-    /// method alongside the Component's other role registrations.
-    pub fn register_bootstrap_dispatcher<T: crate::contracts::bootstrap::Bootstrap + 'static>(
-        &mut self,
-    ) where
-        <T as crate::contracts::bootstrap::Bootstrap>::Error: std::fmt::Display,
-    {
-        let type_id = std::any::TypeId::of::<T>();
-        self.bootstrap_dispatchers.insert(
-            type_id,
-            crate::engine::invoke::make_bootstrap_dispatcher::<T>(),
-        );
-    }
-
-    /// Bind a Component bootstrap entry. Records `slot → cref` in
-    /// `bootstrap.component_bootstraps`; subsequent host-supplied
-    /// `BootstrapRequest`s targeting `slot` resolve the bound
-    /// `ComponentRef` through this map. Wires the Component-arm
-    /// seam the F5 install path will populate; F3 Commit 3 exposes
-    /// it under `test-components` so the integration tests in
-    /// `core_component_bootstrap_tests.rs` can register fixtures
-    /// without going through the install pipeline.
-    #[cfg(any(test, feature = "test-components"))]
-    pub fn register_component_bootstrap(&mut self, slot: &str, cref: ComponentRef) {
-        self.bootstrap.component_bootstraps.insert(
-            slot.to_string(),
-            crate::engine::bootstrap::ComponentBootstrap { cref },
-        );
-    }
-
     /// Record the inventory-declared roles for a registered
     /// component. `Node::ensure_ready` calls this once per
     /// `ComponentRef` after registration, passing the set computed
@@ -1054,12 +1010,6 @@ impl Engine {
         entry_point_keys: &[FunctionKey],
     ) {
         let entry_set: std::collections::HashSet<&FunctionKey> = entry_point_keys.iter().collect();
-        // Collect bootstrap keys + target names registered this call
-        // so the post-pass can stamp touch sets once every function
-        // in the batch is discoverable via `self.functions` —
-        // necessary for forward references (a bootstrap body that
-        // calls a sibling function declared later in `functions`).
-        let mut new_bootstrap_targets: Vec<(FunctionKey, String)> = Vec::new();
         for f in functions {
             let key: FunctionKey = (f.domain.clone(), f.name.clone(), f.overload.clone());
             let graph_name = graph_name_for(&key);
@@ -1082,13 +1032,14 @@ impl Engine {
             }
             let is_bootstrap = bb_ir::keys::read_function_module_phase(f)
                 .is_some_and(|p| p == bb_ir::keys::MODULE_PHASE_BOOTSTRAP);
-            // Bootstrap functions seed their inputs through the F5
+            // Bootstrap functions seed their inputs through the
             // host-driven staging path
-            // (`Engine::enqueue_bootstrap_request`) rather than via a
-            // FunctionCall splice. Mint a `NodeSiteId` per declared
-            // input formal so the staging path can address the slot
-            // via `(NodeSiteId, body_exec_id)` and the body ops can
-            // resolve their input names through `resolve_site_name`.
+            // (`Node::run_bootstrap(&[BootstrapInput])`) rather than
+            // via a FunctionCall splice. Mint a `NodeSiteId` per
+            // declared input formal so the staging path can address
+            // the slot via `(NodeSiteId, body_exec_id)` and the body
+            // ops can resolve their input names through
+            // `resolve_site_name`.
             if is_bootstrap {
                 register_function_input_sites(
                     &mut g,
@@ -1105,84 +1056,7 @@ impl Engine {
                 // user-supplied `targets` slice). Seeding drains
                 // `install_order` front-to-back so each target's
                 // bootstrap fires in slice order.
-                let target_name = key.1.clone();
-                self.bootstrap.register_module(key.clone());
-                new_bootstrap_targets.push((key, target_name));
-            }
-        }
-        // Stamp touch sets for every bootstrap target registered in
-        // this batch. Deferred until after the install loop so
-        // forward-referenced FunctionCalls (callees declared later
-        // in `functions`) resolve against the fully populated
-        // `self.functions` registry.
-        for (key, target_name) in new_bootstrap_targets {
-            let touch_set = self.compute_touch_set(&key);
-            if let Some(meta) = self.bootstrap.module_bootstraps.get_mut(&target_name) {
-                meta.touch_set = touch_set;
-            }
-        }
-    }
-
-    /// Closure of every `ComponentRef` referenced by `function_key`'s
-    /// body (slot-id NodeProtos + transitive FunctionCall callees).
-    /// Walks the function body once: each NodeProto carrying
-    /// [`bb_ir::keys::SLOT_ID_KEY`] contributes the bound
-    /// `ComponentRef` from [`Self::slot_id_to_cref`]; each NodeProto
-    /// whose `(domain, op_type, overload)` resolves a sibling
-    /// FunctionProto in [`Self::functions`] recurses on that callee.
-    /// `visited_keys` defends against bootstrap recursion cycles
-    /// (Module A bootstrap calls Module B body that calls Module A
-    /// body) so the walk terminates even if the program graph
-    /// contains a back-edge through FunctionCalls.
-    pub(crate) fn compute_touch_set(
-        &self,
-        function_key: &FunctionKey,
-    ) -> std::collections::HashSet<ComponentRef> {
-        let mut touch_set: std::collections::HashSet<ComponentRef> =
-            std::collections::HashSet::new();
-        let mut visited_keys: std::collections::HashSet<FunctionKey> =
-            std::collections::HashSet::new();
-        self.collect_touch_set(function_key, &mut visited_keys, &mut touch_set);
-        touch_set
-    }
-
-    /// Recursive worker for [`Self::compute_touch_set`]. Skips
-    /// already-visited keys (cycle defense) and missing-from-registry
-    /// keys (defensive: the install path may discover a key whose
-    /// callee was elided by upstream passes).
-    fn collect_touch_set(
-        &self,
-        function_key: &FunctionKey,
-        visited_keys: &mut std::collections::HashSet<FunctionKey>,
-        touch_set: &mut std::collections::HashSet<ComponentRef>,
-    ) {
-        if !visited_keys.insert(function_key.clone()) {
-            return;
-        }
-        let Some(function) = self.functions.get(function_key) else {
-            return;
-        };
-        // `function` is borrowed off `self.functions`; the recursive
-        // calls only read from other Engine fields (`slot_id_to_cref`,
-        // `functions`) so the borrow holds across the loop.
-        for node in &function.node {
-            if let Some(slot_id) = node
-                .metadata_props
-                .iter()
-                .find(|p| p.key == bb_ir::keys::SLOT_ID_KEY)
-                .and_then(|p| p.value.parse::<u32>().ok())
-            {
-                if let Some(&cref) = self.slot_id_to_cref.get(&slot_id) {
-                    touch_set.insert(cref);
-                }
-            }
-            let callee_key: FunctionKey = (
-                node.domain.clone(),
-                node.op_type.clone(),
-                node.overload.clone(),
-            );
-            if self.functions.contains_key(&callee_key) {
-                self.collect_touch_set(&callee_key, visited_keys, touch_set);
+                self.bootstrap.register_module(key);
             }
         }
     }
@@ -1194,14 +1068,14 @@ impl Engine {
     /// seeded; `false` when the engine has no remaining bootstrap
     /// functions or the previous call is still in flight.
     ///
-    /// Host-driven (F4): `Node::run_bootstrap` invokes this once after
+    /// Host-driven: `Node::run_bootstrap(&[])` invokes this once after
     /// arming `bootstrap.pending`; the poll cascade reseeds via
     /// `maybe_complete_bootstrap` after each phase drains so multi-
     /// target installs surface one `BootstrapComplete` per target in
     /// install order without further host action. Install itself no
     /// longer arms `pending`.
     pub(crate) fn seed_bootstrap_call(&mut self) -> bool {
-        if self.bootstrap.module_exec_id().is_some() {
+        if self.bootstrap.current_exec_id.is_some() {
             return false;
         }
         if self.bootstrap.next_idx >= self.bootstrap.install_order.len() {
@@ -1219,11 +1093,7 @@ impl Engine {
             return false;
         };
         let key = meta.function_key.clone();
-        let touch_set = meta.touch_set.clone();
-        if self
-            .fire_module_bootstrap(target_name, &key, touch_set)
-            .is_none()
-        {
+        if self.fire_module_bootstrap(target_name, &key).is_none() {
             self.bootstrap.next_idx += 1;
             return false;
         }
@@ -1231,17 +1101,10 @@ impl Engine {
     }
 
     /// Seed a Module bootstrap body onto the frontier under a fresh
-    /// ExecId and record it in `bootstrap.in_flight`. Shared by the
-    /// install-order kick seeder ([`Self::seed_bootstrap_call`]) and
-    /// the conflict-queue driver ([`Self::fire_ready_bootstrap`]).
+    /// ExecId and record its ExecId in `bootstrap.current_exec_id`.
     /// Returns the body ExecId on success or `None` when the graph
     /// name is missing (defensive — install populates it).
-    fn fire_module_bootstrap(
-        &mut self,
-        target_name: String,
-        key: &FunctionKey,
-        touch_set: std::collections::HashSet<ComponentRef>,
-    ) -> Option<ExecId> {
+    fn fire_module_bootstrap(&mut self, target_name: String, key: &FunctionKey) -> Option<ExecId> {
         let graph_name = graph_name_for(key);
         let graph_idx = self.graph_idx(&graph_name)?;
         let body_exec_id = self.allocate_exec_id();
@@ -1253,12 +1116,12 @@ impl Engine {
         // Bootstrap takes no input formals and produces no outputs,
         // so no CallContext lives in `pending_calls`; the body-op
         // gate identifies bootstrap-descendant ExecIds by either
-        // direct match against an in_flight ExecId or chain walk
-        // through descendant FunctionCall CallContexts. Quiescence
-        // resolves through `maybe_complete_bootstrap` once every
-        // descendant frontier + pending_async entry clears.
+        // direct match against the current bootstrap ExecId or chain
+        // walk through descendant FunctionCall CallContexts.
+        // Quiescence resolves through `maybe_complete_bootstrap` once
+        // every descendant frontier + pending_async entry clears.
         self.bootstrap
-            .mark_module_in_flight(target_name, body_exec_id, touch_set);
+            .mark_module_in_flight(target_name, body_exec_id);
         for node_idx in 0..node_count as u32 {
             let op_ref = OpRef::pack(graph_idx, node_idx);
             self.exec.frontier.push_back((op_ref, body_exec_id));
@@ -1266,193 +1129,13 @@ impl Engine {
         Some(body_exec_id)
     }
 
-    /// Drive a [`crate::engine::bootstrap::ReadyBootstrap`] returned
-    /// by `BootstrapState::process_pending_requests` or
-    /// `on_bootstrap_drained` onto the frontier. Module-kind entries
-    /// allocate an ExecId and push body ops; Component-kind entries
-    /// allocate an ExecId, lock the bound `ComponentRef` via the
-    /// gate's touch set, and synchronously invoke the registered
-    /// `Bootstrap::bootstrap` impl through the dispatcher registry.
-    /// Returns the body ExecId on success.
-    pub(crate) fn fire_ready_bootstrap(
+    /// Stage one [`crate::engine::BootstrapInput`] against its target's
+    /// declared formal inputs, copy the bytes via Principle 1a, and
+    /// seed the body onto the frontier. Helper called by
+    /// [`Self::run_bootstrap`] per non-empty target.
+    fn enqueue_module_bootstrap(
         &mut self,
-        ready: crate::engine::bootstrap::ReadyBootstrap,
-    ) -> Option<ExecId> {
-        match ready.kind {
-            crate::engine::bootstrap::BootstrapKind::Module { target } => {
-                let key = self
-                    .bootstrap
-                    .module_bootstraps
-                    .get(&target)
-                    .map(|m| m.function_key.clone())?;
-                self.fire_module_bootstrap(target, &key, ready.touch_set)
-            }
-            crate::engine::bootstrap::BootstrapKind::Component { slot } => {
-                self.fire_component_bootstrap(slot, ready.touch_set)
-            }
-        }
-    }
-
-    /// Seed a Component bootstrap: resolve `slot → cref` via
-    /// `bootstrap.component_bootstraps`, allocate an ExecId, lock the
-    /// `{cref}` touch set on `bootstrap.in_flight` so body ops on
-    /// disjoint Components keep firing, and synchronously invoke the
-    /// concrete `Bootstrap::bootstrap` through the dispatcher
-    /// registry. Returns the body ExecId on success.
-    ///
-    /// `DispatchResult::Immediate` retires the in-flight entry
-    /// in-line via [`crate::engine::bootstrap::BootstrapState::on_bootstrap_drained`]
-    /// and fires any promoted waiters so the conflict-queue path
-    /// stays uniform across Module and Component kinds.
-    /// `DispatchResult::Async` parks the ExecId on `pending_async`
-    /// under a synthetic `OpRef`; the regular `handle_completion`
-    /// path drives the eventual drain once the impl calls
-    /// `ctx.complete_command(cmd_id, …)`.
-    fn fire_component_bootstrap(
-        &mut self,
-        slot: String,
-        touch_set: std::collections::HashSet<ComponentRef>,
-    ) -> Option<ExecId> {
-        let cref = self.bootstrap.component_bootstraps.get(&slot)?.cref;
-        let body_exec_id = self.allocate_exec_id();
-        // Use the supplied touch_set so caller-supplied lock semantics
-        // win when present; F4 may extend the closure to include
-        // declared dependencies. Falling back to `{cref}` keeps the
-        // gate locking the dispatching Component even when the host
-        // forgets to pass a touch_set (defensive — production
-        // callers always populate it).
-        let touch_set = if touch_set.is_empty() {
-            let mut t = std::collections::HashSet::new();
-            t.insert(cref);
-            t
-        } else {
-            touch_set
-        };
-        self.bootstrap
-            .in_flight
-            .push(crate::engine::bootstrap::InFlightBootstrap {
-                kind: crate::engine::bootstrap::BootstrapKind::Component { slot: slot.clone() },
-                exec_id: body_exec_id,
-                touch_set,
-                staged_inputs: std::collections::HashSet::new(),
-            });
-        // Resolve dispatcher + invoke. Errors here surface as a
-        // failed bootstrap step — the host sees an EngineStep
-        // `OpFailed`-style emission once F5 wires the step plumbing;
-        // for Commit 3 the synchronous-Immediate path leaves the
-        // engine state ready for the next ready bootstrap and lets
-        // the caller observe the success via `bootstrap.in_flight`
-        // draining.
-        let outcome = self.dispatch_component_bootstrap(cref);
-        match outcome {
-            Ok(crate::atomic::DispatchResult::Immediate(_outputs)) => {
-                // Component bootstrap produces no slot outputs (the
-                // Bootstrap trait returns `Result<(), Error>`). Retire
-                // the in-flight entry by ExecId and promote any
-                // waiters; the gate re-opens for the locked
-                // ComponentRef once the in_flight retain step lands.
-                let promoted = self.bootstrap.on_bootstrap_drained(body_exec_id);
-                for r in promoted {
-                    let _ = self.fire_ready_bootstrap(r);
-                }
-                Some(body_exec_id)
-            }
-            Ok(crate::atomic::DispatchResult::Async(cmd_id)) => {
-                // Park the body ExecId on pending_async under a
-                // synthetic OpRef. graph_idx = u32::MAX is reserved
-                // for Component-bootstrap synthetic ops so the
-                // regular `node_for` lookup returns `None` (no
-                // NodeProto on the frontier) and downstream code
-                // skips dispatch retries.
-                let synthetic_op = OpRef::pack(u32::MAX, 0);
-                self.exec.pending_async.insert(
-                    cmd_id,
-                    crate::engine::pending_async::PendingAsync {
-                        op_ref: synthetic_op,
-                        exec_id: body_exec_id,
-                        output_sites: Vec::new(),
-                        deadline_ns: None,
-                    },
-                );
-                Some(body_exec_id)
-            }
-            Err(_) => {
-                // Dispatcher missing or impl returned Err — retire
-                // the in-flight entry so the queue does not wedge;
-                // the host observes the unfinished work via the
-                // missing BootstrapComplete step. F5 promotes this
-                // path to an OpFailed-style EngineStep.
-                let _ = self.bootstrap.on_bootstrap_drained(body_exec_id);
-                None
-            }
-        }
-    }
-
-    /// Look up + invoke the Bootstrap dispatcher for the Component at
-    /// `cref`. Uses the same take-restore pattern as `invoke_atomic`
-    /// so the dispatch closure has exclusive access to the concrete
-    /// while the rest of `engine.components` stays borrowable for
-    /// `RuntimeResourceRef`-style accessors (F5 plumbing — today the
-    /// Bootstrap ctx carries only the cref).
-    fn dispatch_component_bootstrap(
-        &mut self,
-        cref: ComponentRef,
-    ) -> Result<crate::atomic::DispatchResult, String> {
-        let mut taken = self
-            .take_component(cref)
-            .ok_or_else(|| "component missing".to_string())?;
-        // `Box<dyn ErasedComponent>` coerces to `&mut dyn Any` via
-        // the `Any` supertrait bound on `ErasedComponent`; mirrors
-        // the dispatch path in `invoke_atomic` so the downcast in
-        // the `BootstrapDispatchFn` stays consistent across surfaces.
-        let any: &mut dyn std::any::Any = taken.as_mut();
-        let tid = (*any).type_id();
-        let dispatcher = self
-            .bootstrap_dispatchers
-            .get(&tid)
-            .copied()
-            .ok_or_else(|| "no Bootstrap dispatcher registered for component".to_string());
-        let result = match dispatcher {
-            Ok(f) => {
-                let mut ctx = crate::contracts::bootstrap::BootstrapCtx::new(cref);
-                f(any, &mut ctx)
-            }
-            Err(e) => Err(e),
-        };
-        self.restore_component(cref, taken);
-        result
-    }
-
-    /// Stage a host-supplied [`crate::engine::BootstrapRequest`] and
-    /// fire the target Module's bootstrap immediately:
-    ///
-    /// 1. Resolve `request.target` → `FunctionKey` →
-    ///    `graph_name` → `graph_idx`.
-    /// 2. Read the bootstrap function's declared input port names
-    ///    (the slots minted by `register_function_input_sites` against
-    ///    `function.input`).
-    /// 3. Validate the supplied `(input_name, bytes)` pairs against
-    ///    the formal set — missing required → `MissingInput`, extra →
-    ///    `UnknownInput`.
-    /// 4. Allocate the body `ExecId`.
-    /// 5. For each formal: charge against the ingress byte budget,
-    ///    fallibly reserve a framework-owned `Vec<u8>` via the
-    ///    `try_reserve_exact` seam, copy in the caller's borrowed
-    ///    bytes, wrap as `BytesValue`, and write into the slot table
-    ///    at `(site, body_exec_id)`. The caller's slices may drop the
-    ///    moment this call returns — Principle 1a satisfied.
-    /// 6. Mark the Module bootstrap in-flight + push the body's
-    ///    `OpRef`s onto the frontier so the next `Engine::poll` drives
-    ///    it to completion.
-    ///
-    /// Mid-flight failures (budget exhaustion, allocator fault) release
-    /// every byte charge admitted earlier in the same call so the
-    /// counter never leaks. The seed/in-flight bookkeeping only lands
-    /// once every input stages successfully, so a failed request leaves
-    /// the engine's bootstrap state untouched.
-    pub fn enqueue_bootstrap_request(
-        &mut self,
-        request: crate::engine::bootstrap::BootstrapRequest<'_>,
+        request: crate::engine::bootstrap::BootstrapInput<'_>,
     ) -> Result<(), crate::errors::BootstrapError> {
         // 1. Resolve target → function_key → graph_idx.
         let meta = self
@@ -1464,7 +1147,6 @@ impl Engine {
                 available: self.bootstrap.install_order.clone(),
             })?;
         let function_key = meta.function_key.clone();
-        let touch_set = meta.touch_set.clone();
         let graph_name = graph_name_for(&function_key);
         let graph_idx = self.graph_idx(&graph_name).ok_or_else(|| {
             crate::errors::BootstrapError::UnknownTarget {
@@ -1500,9 +1182,8 @@ impl Engine {
 
         // Resolve each formal to its NodeSiteId before allocating the
         // ExecId — a missing site at this stage is an install
-        // invariant violation (register_function_input_sites runs
-        // alongside register_module above), but defending against it
-        // keeps the error path total.
+        // invariant violation, but defending against it keeps the
+        // error path total.
         let mut sites: Vec<(crate::ids::NodeSiteId, &[u8])> =
             Vec::with_capacity(request.inputs.len());
         for (input_name, bytes) in request.inputs {
@@ -1522,10 +1203,8 @@ impl Engine {
 
         // 5. Per-input charge + Principle 1a copy. Track total
         // admitted bytes so a mid-loop failure releases the full
-        // charge in one shot (none of the staged carriers ever
-        // reached the slot table).
+        // charge in one shot.
         let mut admitted: usize = 0;
-        let mut staged_sites: Vec<crate::ids::NodeSiteId> = Vec::with_capacity(sites.len());
         for (site, bytes) in &sites {
             let byte_count = bytes.len();
             if let Err(reason) = self.try_charge(byte_count) {
@@ -1552,19 +1231,15 @@ impl Engine {
             let value: Box<dyn crate::slot_value::SlotValue> =
                 Box::new(crate::syscall::values::BytesValue(owned));
             self.slot_write(*site, body_exec_id, value);
-            staged_sites.push(*site);
         }
 
         // 6. Mark the Module bootstrap in-flight and push every body
         // OpRef onto the frontier. The body-op gate (`is_op_locked`)
-        // recognises the freshly seeded ExecId via `module_exec_id`
-        // and the touch-set so disjoint Components keep firing. Any
-        // body op that consumes a staged input reads its value
-        // through `resolve_site_name` → slot_table at
-        // `(site, body_exec_id)`.
+        // recognises the freshly seeded ExecId via `current_exec_id`
+        // so descendant ops keep firing.
         self.bootstrap.pending = true;
         self.bootstrap
-            .mark_module_in_flight(request.target.to_string(), body_exec_id, touch_set);
+            .mark_module_in_flight(request.target.to_string(), body_exec_id);
         let node_count = self.graphs[graph_idx as usize].function.node.len();
         for node_idx in 0..node_count as u32 {
             let op_ref = OpRef::pack(graph_idx, node_idx);
@@ -1573,36 +1248,28 @@ impl Engine {
         Ok(())
     }
 
-    /// Drain `bootstrap.pending_requests` once + fire each
-    /// non-conflicting target. Conflicting requests stay parked on
-    /// `bootstrap.waiting` until a drain promotes them via
-    /// [`Self::maybe_complete_bootstrap`]. Called from
-    /// `Engine::poll` at the top of each cycle so requests staged
-    /// between polls land on the frontier before the body phase
-    /// resumes.
-    pub(crate) fn drive_pending_bootstrap_requests(&mut self) {
-        let ready = self.bootstrap.process_pending_requests();
-        for r in ready {
-            let _ = self.fire_ready_bootstrap(r);
+    /// Flat host-facing bootstrap entry point. Empty slice fires the
+    /// install-order kick (arming + seeding every queued target);
+    /// non-empty slice stages each [`BootstrapInput`] in slice order
+    /// using the same validation + Principle 1a copy + frontier seed
+    /// as `enqueue_module_bootstrap`.
+    pub fn run_bootstrap(
+        &mut self,
+        targets: &[crate::engine::bootstrap::BootstrapInput<'_>],
+    ) -> Result<bool, crate::errors::BootstrapError> {
+        if targets.is_empty() {
+            if !self.bootstrap.arm_install_order() {
+                return Ok(false);
+            }
+            return Ok(self.seed_bootstrap_call());
         }
-    }
-
-    /// Arm the install-order bootstrap queue + seed the next target.
-    /// Host entry point invoked through [`crate::node::Node::run_bootstrap`].
-    /// Returns `true` when arming queued work (the caller should poll);
-    /// `false` when no install-order target remains (idempotent on a
-    /// fully drained Node).
-    ///
-    /// Cascade-fires multiple targets via the same
-    /// `maybe_complete_bootstrap` reseed path the body-poll cycle
-    /// uses: one call here picks the next target, the regular drain
-    /// advances `next_idx`, and the next `seed_bootstrap_call`
-    /// (inside poll) picks the following target.
-    pub fn run_bootstrap(&mut self) -> bool {
-        if !self.bootstrap.arm_install_order() {
-            return false;
+        for req in targets {
+            self.enqueue_module_bootstrap(crate::engine::bootstrap::BootstrapInput {
+                target: req.target,
+                inputs: req.inputs,
+            })?;
         }
-        self.seed_bootstrap_call()
+        Ok(true)
     }
 
     /// `(domain, name, overload)` of the first bootstrap function
@@ -1627,35 +1294,21 @@ impl Engine {
     }
 
     /// `true` while a bootstrap call is outstanding. Armed by
-    /// [`Self::run_bootstrap`] (host kick) or by the host's
-    /// staged-formals path (`enqueue_bootstrap_request`); cleared
-    /// once every queued phase drains.
+    /// [`Self::run_bootstrap`]; cleared once every queued phase
+    /// drains.
     pub fn bootstrap_pending(&self) -> bool {
         self.bootstrap.pending
     }
 
-    /// `true` when a Component bootstrap is registered for `slot`.
-    /// Today the Component bootstrap registry stays empty so this
-    /// always returns `false`; F5 wires the registration path. Wired
-    /// now so the host can introspect the Bootstrap Contract surface
-    /// without reaching through internal accessors.
-    pub fn has_component_bootstrap(&self, slot: &str) -> bool {
-        self.bootstrap.component_bootstrap(slot).is_some()
-    }
-
     /// Lifecycle status for the host-facing
     /// [`crate::node::Node::bootstrap_status`] accessor. `Idle` when no
-    /// bootstrap is queued or in-flight; `Running` when one or more
-    /// bootstraps occupy `in_flight` (the body gate is parking touched
-    /// ops); `WaitingForInput` when work is staged on `pending_requests`
-    /// but no in-flight phase has been seeded yet (the host must drive
-    /// the queue to advance).
+    /// bootstrap is queued or in-flight; `Running` when a bootstrap
+    /// body is currently in-flight; `WaitingForInput` when the
+    /// install-order queue still has unseeded targets but no body is
+    /// active yet (the host must drive the queue to advance).
     pub fn bootstrap_status(&self) -> crate::engine::bootstrap::BootstrapStatus {
-        if !self.bootstrap.in_flight.is_empty() {
+        if self.bootstrap.current_exec_id.is_some() {
             return crate::engine::bootstrap::BootstrapStatus::Running;
-        }
-        if !self.bootstrap.pending_requests.is_empty() || !self.bootstrap.waiting.is_empty() {
-            return crate::engine::bootstrap::BootstrapStatus::WaitingForInput;
         }
         if self.bootstrap.pending && self.bootstrap.next_idx < self.bootstrap.install_order.len() {
             return crate::engine::bootstrap::BootstrapStatus::WaitingForInput;
@@ -1663,106 +1316,45 @@ impl Engine {
         crate::engine::bootstrap::BootstrapStatus::Idle
     }
 
-    /// Fire a Component bootstrap by slot name. Resolves
-    /// `slot → ComponentRef` via `bootstrap.component_bootstraps`,
-    /// builds a `ReadyBootstrap` with the bound cref as the touch set,
-    /// and dispatches through the engine's internal fire path. Returns
-    /// the dispatching ComponentRef on success so the host can wire
-    /// per-slot telemetry; surfaces `BootstrapError::UnknownTarget`
-    /// when no Component bootstrap is registered at the slot.
-    pub fn fire_component_bootstrap_by_slot(
-        &mut self,
-        slot: &str,
-    ) -> Result<ComponentRef, crate::errors::BootstrapError> {
-        let cref = self
-            .bootstrap
-            .component_bootstrap(slot)
-            .map(|cb| cb.cref)
-            .ok_or_else(|| crate::errors::BootstrapError::UnknownTarget {
-                target_name: slot.to_string(),
-                available: self
-                    .bootstrap
-                    .component_bootstraps
-                    .keys()
-                    .cloned()
-                    .collect(),
-            })?;
-        let mut touch_set = std::collections::HashSet::new();
-        touch_set.insert(cref);
-        // `pending` flips on so the body-op gate parks touching ops
-        // while the Component bootstrap dispatches. `fire_ready_bootstrap`
-        // retires the in-flight slot inline on `Immediate` dispatches.
-        self.bootstrap.pending = true;
-        let _ = self.fire_ready_bootstrap(crate::engine::bootstrap::ReadyBootstrap {
-            kind: crate::engine::bootstrap::BootstrapKind::Component {
-                slot: slot.to_string(),
-            },
-            touch_set,
-            staged_inputs: std::collections::HashSet::new(),
-        });
-        // Component bootstrap with no remaining queued work + nothing
-        // in-flight (Immediate retired in_flight) means we can clear the
-        // pending arming so subsequent `Node::poll` does not park body
-        // ops indefinitely.
-        if self.bootstrap.in_flight.is_empty()
-            && self.bootstrap.pending_requests.is_empty()
-            && self.bootstrap.waiting.is_empty()
-            && self.bootstrap.next_idx >= self.bootstrap.install_order.len()
-        {
-            self.bootstrap.pending = false;
-        }
-        Ok(cref)
-    }
-
     /// `true` when `target_name` is already on the install-order Module
-    /// bootstrap queue (so `Node::run_bootstrap` can surface
-    /// `AlreadyTransitivelyQueued` before re-staging the same target).
+    /// bootstrap queue. Used by `Node::run_bootstrap` validation.
     pub fn module_bootstrap_registered(&self, target_name: &str) -> bool {
         self.bootstrap.module_bootstraps.contains_key(target_name)
     }
 
     /// Snapshot of every registered Module bootstrap target name in
-    /// install order. Used by `Node::run_bootstrap` to enqueue an
-    /// empty-input request per target without reaching into the
-    /// engine's private `install_order` Vec.
+    /// install order. Returned by `BootstrapError::UnknownTarget` so
+    /// callers see the legal set.
     pub fn module_bootstrap_target_names(&self) -> Vec<String> {
         self.bootstrap.install_order.clone()
     }
 
-    /// Per-component body-op gate. Returns `true` when the op must
-    /// park because an in-flight bootstrap locks the `ComponentRef`
-    /// it touches; `false` when the op is fireable.
+    /// Body-op gate. Returns `true` when the op must park because a
+    /// bootstrap body is in-flight and the op's ExecId is not a
+    /// descendant of the bootstrap ExecId; `false` when the op is
+    /// fireable.
     ///
     /// Resolution order:
-    /// 1. No in-flight bootstraps → fire (the gate is dormant).
-    /// 2. `exec_id` descends from some in-flight bootstrap's ExecId
-    ///    via the `pending_calls.parent_exec_id` chain → fire. The
-    ///    bootstrap body itself (and its sub-FunctionCalls) is
-    ///    allowed to invoke any op regardless of the lock set.
-    /// 3. Resolve the touched `ComponentRef` from the op's NodeProto
-    ///    via `SLOT_ID_KEY → slot_id_to_cref`. If the touched cref
-    ///    is in some in-flight bootstrap's `touch_set` → park.
-    ///    Stateless syscalls (no slot_id stamp, no role binding)
-    ///    fire because they reach no component.
-    ///
-    /// O(call depth * in-flight) per call — Module composition
-    /// depth multiplied by the active bootstrap count. In-flight is
-    /// 1 today; F3 Commit 2 enables concurrent disjoint bootstraps.
-    pub(crate) fn is_op_locked(&self, op_ref: OpRef, exec_id: ExecId) -> bool {
-        if self.bootstrap.in_flight.is_empty() {
+    /// 1. `bootstrap.pending` clear → fire (gate dormant).
+    /// 2. `exec_id` descends from the in-flight bootstrap ExecId via
+    ///    the `pending_calls.parent_exec_id` chain → fire. Bootstrap
+    ///    body + its sub-FunctionCalls keep firing while the body
+    ///    runs.
+    /// 3. Otherwise → park. The collapsed gate denies every body-op
+    ///    until the bootstrap drains.
+    pub(crate) fn is_op_locked(&self, _op_ref: OpRef, exec_id: ExecId) -> bool {
+        if !self.bootstrap.pending {
             return false;
         }
+        let Some(boot_exec) = self.bootstrap.current_exec_id else {
+            return false;
+        };
         // 2. Bootstrap-descendant exec ids fire freely. Walk the
-        // call chain once and short-circuit if any in-flight ExecId
-        // matches.
+        // call chain once and short-circuit if the in-flight ExecId
+        // matches anywhere along the chain.
         let mut current = exec_id;
         loop {
-            if self
-                .bootstrap
-                .in_flight
-                .iter()
-                .any(|b| b.exec_id == current)
-            {
+            if current == boot_exec {
                 return false;
             }
             match self.exec.pending_calls.get(&current) {
@@ -1770,28 +1362,7 @@ impl Engine {
                 None => break,
             }
         }
-        // 3. Look up the touched ComponentRef from the op's slot_id
-        // stamp. Ops without a slot_id (stateless syscalls,
-        // FunctionCall nodes, unbound roles) reach no component, so
-        // no in-flight touch set can lock them.
-        let Some(node) = self.node_for(op_ref) else {
-            return false;
-        };
-        let Some(slot_id) = node
-            .metadata_props
-            .iter()
-            .find(|p| p.key == bb_ir::keys::SLOT_ID_KEY)
-            .and_then(|p| p.value.parse::<u32>().ok())
-        else {
-            return false;
-        };
-        let Some(&touched) = self.slot_id_to_cref.get(&slot_id) else {
-            return false;
-        };
-        self.bootstrap
-            .in_flight
-            .iter()
-            .any(|b| b.touch_set.contains(&touched))
+        true
     }
 
     /// Inspect engine state and pop the in-flight bootstrap key once
@@ -1802,19 +1373,11 @@ impl Engine {
     /// `seed_bootstrap_call` advances to the following target;
     /// `bootstrap.pending` flips off only after the last key drains.
     /// Called after each drain phase + the ingress completion drain.
-    ///
-    /// The descendant walk mirrors the body-op gate predicate: a
-    /// frontier entry belongs to bootstrap when its ExecId chain
-    /// terminates at the in-flight bootstrap's ExecId. Bootstrap
-    /// itself never installs a `CallContext` (zero formals, zero
-    /// outputs); child FunctionCalls that the bootstrap body invokes
-    /// do, and the chain walk reaches the bootstrap ExecId through
-    /// them.
     pub(crate) fn maybe_complete_bootstrap(&mut self) -> bool {
         if !self.bootstrap.pending {
             return false;
         }
-        let Some(boot_exec) = self.bootstrap.module_exec_id() else {
+        let Some(boot_exec) = self.bootstrap.current_exec_id else {
             return false;
         };
         let descendant = |engine: &Engine, mut exec_id: ExecId| -> bool {
@@ -1846,29 +1409,12 @@ impl Engine {
         }
         // The in-flight phase drained. Advance the install_order
         // pointer (the post-kick cascade) and retire the in-flight
-        // entry by ExecId via `on_bootstrap_drained`, which also
-        // promotes any
-        // host-driven waiter whose touch set no longer conflicts
-        // with the remaining in-flight set. `bootstrap.pending`
-        // stays armed while install_order keys remain queued so
-        // body ops touching a locked Component keep parking through
-        // the next phase's run. The `install_order` Vec itself is
-        // append-only — introspection still reports every queued
-        // target.
+        // ExecId. `bootstrap.pending` clears once the cursor reaches
+        // the end of `install_order` AND no in-flight body remains.
         self.bootstrap.next_idx += 1;
-        let promoted = self.bootstrap.on_bootstrap_drained(boot_exec);
-        for ready in promoted {
-            // Promoted waiters fire immediately on the same poll
-            // cycle so the conflict-queue path doesn't wedge waiting
-            // for a future poll. Defensive `let _` — the only failure
-            // path is a missing graph for the target, which the
-            // install path forbids.
-            let _ = self.fire_ready_bootstrap(ready);
-        }
+        self.bootstrap.clear_in_flight();
         if self.bootstrap.next_idx >= self.bootstrap.install_order.len()
-            && self.bootstrap.in_flight.is_empty()
-            && self.bootstrap.pending_requests.is_empty()
-            && self.bootstrap.waiting.is_empty()
+            && self.bootstrap.current_exec_id.is_none()
         {
             self.bootstrap.pending = false;
         }
@@ -2083,7 +1629,7 @@ impl Engine {
     /// unparked entry so disjoint Components can keep firing while
     /// bootstrap runs against an unrelated slot.
     pub(crate) fn pop_frontier_fireable(&mut self) -> Option<(OpRef, ExecId)> {
-        if self.bootstrap.in_flight.is_empty() {
+        if !self.bootstrap.pending {
             return self.exec.frontier.pop_front();
         }
         let idx = self
@@ -2210,17 +1756,9 @@ pub(crate) fn graph_name_for(key: &FunctionKey) -> String {
 mod multi_bootstrap_tests;
 
 #[cfg(test)]
-#[path = "core_touch_set_tests.rs"]
-mod touch_set_tests;
-
-#[cfg(test)]
 #[path = "core_op_locked_tests.rs"]
 mod op_locked_tests;
 
 #[cfg(test)]
-#[path = "core_component_bootstrap_tests.rs"]
-mod component_bootstrap_tests;
-
-#[cfg(test)]
-#[path = "core_bootstrap_request_tests.rs"]
-mod bootstrap_request_tests;
+#[path = "core_bootstrap_input_tests.rs"]
+mod bootstrap_input_tests;

@@ -146,7 +146,7 @@ the engine seeds the bootstrap call at install time. Source:
 ### Touch-set computation
 
 The engine's per-component body-op gate (see
-[ENGINE.md §6.8.4](ENGINE.md#684-per-component-gate--is_op_locked))
+[ENGINE.md §6.8.3](ENGINE.md#683-body-op-gate--is_op_locked))
 needs the closure of every `ComponentRef` each Module
 bootstrap's body reaches. This is the bootstrap's **touch set**.
 Computation lives on the engine — not in the compiler — because

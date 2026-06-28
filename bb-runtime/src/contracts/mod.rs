@@ -9,7 +9,6 @@
 pub mod aggregator;
 pub mod backend;
 pub mod backend_default_walk;
-pub mod bootstrap;
 pub mod codec;
 pub mod data_source;
 pub mod index;
@@ -18,7 +17,6 @@ pub mod peer_selector;
 
 pub use aggregator::Aggregator;
 pub use backend::Backend;
-pub use bootstrap::{Bootstrap, BootstrapCtx};
 pub use codec::Codec;
 pub use data_source::DataSource;
 pub use index::Index;

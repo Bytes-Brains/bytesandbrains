@@ -35,36 +35,6 @@ use bb_ir::proto::onnx::ModelProto;
 /// closure once per produced step.
 pub type TelemetryTap = Box<dyn FnMut(&crate::engine::EngineStep)>;
 
-/// Selector for [`Node::run_bootstrap`]. One enum, four variants
-/// covering every bootstrap-kick shape — install-order, by Module
-/// target name, by Module target name with staged inputs, and by
-/// Component slot.
-pub enum BootstrapTarget<'a> {
-    /// Drive every install-order Module bootstrap target on this Node.
-    /// Equivalent to the F4 host kick: arms + seeds the install-order
-    /// queue, then drives the engine until every queued target reaches
-    /// `BootstrapComplete` or one suspends on async.
-    All,
-    /// Drive specific Module bootstrap targets by name (with empty
-    /// inputs). Surfaces `BootstrapError::UnknownTarget` when any name
-    /// is not a registered Module bootstrap; the batch validates
-    /// atomically before any staging happens. Useful when the host
-    /// knows every target's bootstrap takes no formals.
-    ModuleNames(&'a [&'a str]),
-    /// Drive Module bootstrap targets with explicit inputs. Each
-    /// `BootstrapRequest`'s `inputs` are validated against the
-    /// target's declared formals; the framework copies each
-    /// borrowed `&[u8]` into engine-owned storage (Principle 1a).
-    /// On any validation failure the engine's bootstrap state stays
-    /// untouched.
-    ModuleRequests(&'a [crate::engine::BootstrapRequest<'a>]),
-    /// Drive Component bootstraps by slot name. Each slot must resolve
-    /// to a registered Component bootstrap; the batch validates
-    /// atomically before any dispatch fires. Slots fire in slice
-    /// order through the registered Bootstrap dispatcher.
-    Slots(&'a [&'a str]),
-}
-
 /// Constructed BB Node ready to drive ML work. Produced by
 /// [`bytesandbrains::install`] — by the time the host holds one,
 /// the engine has resolved its dispatch table, registered every
@@ -742,127 +712,59 @@ impl Node {
     /// Drive bootstrap targets to completion. Returns every
     /// `EngineStep` the bootstrap path emitted, including each
     /// drained phase's `BootstrapComplete` or the yielding
-    /// `WaitingOnBootstrap`. Idempotent: a Node whose bootstrap
-    /// already completed (or a Node with no install-order recording)
-    /// returns an empty vec.
+    /// `WaitingOnBootstrap`.
     ///
-    /// Variant semantics:
+    /// Semantics by slice shape:
     ///
-    /// - [`BootstrapTarget::All`] arms + seeds the install-order
-    ///   queue, then polls until every queued target reaches
-    ///   `BootstrapComplete` or one suspends on an async completion.
-    ///   Equivalent to the F4 host kick.
-    /// - [`BootstrapTarget::ModuleNames`] / [`BootstrapTarget::ModuleRequests`]
-    ///   validate target names + input formals atomically — the whole
-    ///   batch rejects with `BootstrapError::UnknownTarget` /
-    ///   `BootstrapError::AlreadyTransitivelyQueued` /
-    ///   `BootstrapError::UnknownInput` / `BootstrapError::MissingInput`
-    ///   before any staging happens. On success the framework copies
-    ///   each request's borrowed `&[u8]` inputs into engine-owned
-    ///   storage (Principle 1a: caller slices may drop the moment
-    ///   this call returns), then drives the staged bodies to
-    ///   completion.
-    /// - [`BootstrapTarget::Slots`] resolves each slot to a registered
-    ///   Component bootstrap, validates the whole batch atomically,
-    ///   then fires each in slice order through the dispatcher. The
-    ///   drain loop runs after all slots fire so synchronous
-    ///   `Immediate` dispatches retire inline and async ones surface
-    ///   `WaitingOnBootstrap`.
+    /// - Empty slice `&[]` — arms + seeds the install-order queue,
+    ///   then polls until every queued target reaches
+    ///   `BootstrapComplete` or one suspends on async. Idempotent on
+    ///   a fully drained Node (returns an empty vec).
+    /// - Non-empty slice — each [`BootstrapInput`]'s `inputs` are
+    ///   validated against the target's declared formals; on any
+    ///   error the engine's bootstrap state stays untouched.
+    ///   Successful staging fires the named targets in slice order
+    ///   regardless of install-order — this is the re-bootstrap
+    ///   surface (no idempotence guard).
+    ///
+    /// The framework copies each input's borrowed `&[u8]` into
+    /// engine-owned storage (Principle 1a: caller slices may drop
+    /// the moment this call returns).
     ///
     /// On async suspension the host posts the matured completion via
-    /// the ingress and re-invokes `run_bootstrap` to drain the
+    /// the ingress and re-invokes `run_bootstrap(&[])` to drain the
     /// resumed op.
     ///
-    /// Body-phase ops touching a locked `ComponentRef` do not fire
-    /// during this call; the `is_op_locked` gate in
-    /// `pop_frontier_fireable` keeps them parked until the bootstrap
-    /// in-flight set drops.
+    /// Body-phase ops do not fire during this call; the
+    /// `is_op_locked` gate keeps them parked until the bootstrap
+    /// body drains.
     pub fn run_bootstrap(
         &mut self,
-        target: BootstrapTarget<'_>,
+        targets: &[crate::engine::BootstrapInput<'_>],
     ) -> Result<Vec<crate::engine::EngineStep>, crate::errors::BootstrapError> {
-        match target {
-            BootstrapTarget::All => {
-                // Arm + seed the install-order queue (no-op when no
-                // targets remain). `Engine::run_bootstrap` returns
-                // false on a fully drained Node so the drain loop
-                // exits immediately.
-                let armed = self.engine.run_bootstrap();
-                if !armed && !self.engine.bootstrap_pending() {
-                    return Ok(Vec::new());
+        if targets.is_empty() {
+            // Arm + seed the install-order queue (no-op when no
+            // targets remain). On a fully drained Node return an
+            // empty vec immediately without polling.
+            let armed = self.engine.run_bootstrap(&[])?;
+            if !armed && !self.engine.bootstrap_pending() {
+                return Ok(Vec::new());
+            }
+        } else {
+            // Validate each target name against the install-order
+            // registry before any staging happens, so the batch
+            // rejects atomically on the first unknown target.
+            for req in targets {
+                if !self.engine.module_bootstrap_registered(req.target) {
+                    return Err(crate::errors::BootstrapError::UnknownTarget {
+                        target_name: req.target.to_string(),
+                        available: self.engine.module_bootstrap_target_names(),
+                    });
                 }
             }
-            BootstrapTarget::ModuleNames(targets) => {
-                let requests: Vec<crate::engine::BootstrapRequest<'_>> = targets
-                    .iter()
-                    .map(|t| crate::engine::BootstrapRequest {
-                        target: t,
-                        inputs: &[],
-                    })
-                    .collect();
-                self.stage_module_requests(&requests)?;
-            }
-            BootstrapTarget::ModuleRequests(requests) => {
-                self.stage_module_requests(requests)?;
-            }
-            BootstrapTarget::Slots(slots) => {
-                // Pre-flight: every slot must resolve to a registered
-                // Component bootstrap. Atomic — no firing happens
-                // until every slot in the batch passes.
-                for slot in slots {
-                    if !self.engine.has_component_bootstrap(slot) {
-                        return Err(crate::errors::BootstrapError::UnknownTarget {
-                            target_name: (*slot).to_string(),
-                            available: self
-                                .engine
-                                .module_bootstrap_target_names()
-                                .into_iter()
-                                .chain(std::iter::empty())
-                                .collect(),
-                        });
-                    }
-                }
-                for slot in slots {
-                    self.engine.fire_component_bootstrap_by_slot(slot)?;
-                }
-            }
+            self.engine.run_bootstrap(targets)?;
         }
         Ok(self.drain_bootstrap())
-    }
-
-    /// Pre-flight + stage a batch of `BootstrapRequest`s through the
-    /// engine's F5 immediate-fire entry point. Validates target
-    /// registration and duplicate detection atomically before any
-    /// per-input copy happens; on any error path the engine's
-    /// bootstrap state stays untouched.
-    fn stage_module_requests(
-        &mut self,
-        requests: &[crate::engine::BootstrapRequest<'_>],
-    ) -> Result<(), crate::errors::BootstrapError> {
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for req in requests {
-            if !self.engine.module_bootstrap_registered(req.target) {
-                return Err(crate::errors::BootstrapError::UnknownTarget {
-                    target_name: req.target.to_string(),
-                    available: self.engine.module_bootstrap_target_names(),
-                });
-            }
-            if !seen.insert(req.target) {
-                return Err(crate::errors::BootstrapError::AlreadyTransitivelyQueued {
-                    target_name: req.target.to_string(),
-                });
-            }
-        }
-        for req in requests {
-            // Borrow each request through its declared lifetime; the
-            // engine copies bytes into framework-owned storage so the
-            // borrow ends when this call returns.
-            self.enqueue_bootstrap_request(crate::engine::BootstrapRequest {
-                target: req.target,
-                inputs: req.inputs,
-            })?;
-        }
-        Ok(())
     }
 
     /// Drive the engine's poll loop until every staged bootstrap
@@ -890,38 +792,12 @@ impl Node {
         steps
     }
 
-    /// Stage a host-supplied [`crate::engine::BootstrapRequest`] +
-    /// fire the addressed Module bootstrap immediately. Crate-internal
-    /// helper for [`Self::run_bootstrap`]'s
-    /// [`BootstrapTarget::ModuleRequests`] arm. Forwards to the
-    /// engine's F5 immediate-fire entry point: validates
-    /// `request.inputs` against the target's declared formals, runs
-    /// the Principle 1a copy (`try_charge` → `try_reserve_exact` →
-    /// `extend_from_slice`) against the engine's ingress byte budget,
-    /// and pushes the body ops onto the frontier. The caller's
-    /// borrowed `&[u8]` slices may drop the moment this call returns.
-    ///
-    /// Returns `BootstrapError::UnknownTarget` /
-    /// `BootstrapError::UnknownInput` / `BootstrapError::MissingInput`
-    /// when the request fails validation, and
-    /// `BootstrapError::AllocationFailed` when the engine's budget /
-    /// allocator rejects a staged payload. On any error path the
-    /// engine's bootstrap state stays untouched — partially admitted
-    /// byte charges are released before the error surfaces.
-    pub(crate) fn enqueue_bootstrap_request(
-        &mut self,
-        request: crate::engine::BootstrapRequest<'_>,
-    ) -> Result<(), crate::errors::BootstrapError> {
-        self.engine.enqueue_bootstrap_request(request)
-    }
-
     /// Snapshot of the engine's bootstrap lifecycle. Returns
     /// `BootstrapStatus::Idle` when no bootstrap is queued or
-    /// in-flight, `Running` when at least one bootstrap is in-flight
-    /// (the body gate is parking touched ops), and `WaitingForInput`
-    /// when the install-order queue still has unseeded targets or
-    /// host-staged requests sit on `pending_requests` / `waiting`.
-    /// Pure read — does not advance any queue.
+    /// in-flight, `Running` when a bootstrap is in-flight (body ops
+    /// gate), and `WaitingForInput` when the install-order queue
+    /// still has unseeded targets. Pure read — does not advance any
+    /// queue.
     pub fn bootstrap_status(&self) -> crate::engine::bootstrap::BootstrapStatus {
         self.engine.bootstrap_status()
     }

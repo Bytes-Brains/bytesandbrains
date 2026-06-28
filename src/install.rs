@@ -448,19 +448,6 @@ fn register_dispatchers_for(
             register_fn(engine);
         }
     }
-    // Bootstrap dispatcher — the `#[derive(bb::Concrete)]` derive
-    // emits one `BootstrapDispatcherRegistration` per concrete so
-    // every registered component participates in component
-    // bootstrap without the install caller naming the type.
-    // Idempotent under the `bootstrap` pseudo-role key so cascade
-    // re-registration of the same concrete (multi-target installs)
-    // does not double-register.
-    let bootstrap_key = (type_name, "bootstrap");
-    if registered.insert(bootstrap_key) {
-        if let Some(register_fn) = bb_runtime::registry::bootstrap_dispatcher_for(type_name) {
-            register_fn(engine);
-        }
-    }
 }
 
 fn stamp_component_roles(

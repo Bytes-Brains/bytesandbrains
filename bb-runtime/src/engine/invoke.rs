@@ -96,9 +96,7 @@ impl Engine {
     }
 
     /// Dispatch through `ProtocolRuntime::dispatch_atomic` for an op
-    /// resolved to a bound component. Factored out of the legacy
-    /// `invoke_one` cascade so the new dispatch path can call it
-    /// directly without re-doing the syscall / atomic_dispatch lookup.
+    /// resolved to a bound component.
     fn invoke_atomic(
         &mut self,
         op_ref: OpRef,
@@ -1007,47 +1005,6 @@ pub type BackendMaterializeFn =
         u64,
         Vec<u8>,
     ) -> Result<Box<dyn SlotValue>, crate::slot_value::BackendMaterializeError>;
-
-/// Type alias for the `Bootstrap::bootstrap` downcast-dispatch fn
-/// pointer the engine stores per concrete Bootstrap impl. Mirrors
-/// [`ProtocolDispatchFn`]'s erased-`Any` shape so the F3 Component
-/// bootstrap fire path can invoke the impl without a per-TypeId
-/// downcast on every call. The closure downcasts `any` to `T`,
-/// runs `T::bootstrap(&mut BootstrapCtx)`, and reports the
-/// `DispatchResult` (Immediate or Async) for the synthetic single-
-/// op dispatch.
-pub type BootstrapDispatchFn = fn(
-    &mut dyn std::any::Any,
-    &mut crate::contracts::bootstrap::BootstrapCtx,
-) -> Result<DispatchResult, String>;
-
-/// Build a [`BootstrapDispatchFn`] for a concrete `T: Bootstrap`.
-/// Called from `Engine::register_bootstrap_dispatcher` so the
-/// engine's `fire_component_bootstrap` lookup keys on `TypeId::of::<T>()`
-/// and the synthetic op invokes the user's `T::bootstrap` directly.
-///
-/// The Contract method's return is `Result<(), T::Error>`; this
-/// helper converts the `Ok(())` to `DispatchResult::Immediate(Vec::new())`
-/// because Component bootstrap declares no output slots — the
-/// F3 spec lists `Async` as a future option a Component's
-/// override surfaces via a wrapping `CommandId`, but Commit 3
-/// lands the synchronous-Immediate path that every default-no-op
-/// Bootstrap takes.
-pub fn make_bootstrap_dispatcher<T: crate::contracts::bootstrap::Bootstrap + 'static>(
-) -> BootstrapDispatchFn
-where
-    T::Error: std::fmt::Display,
-{
-    |any, ctx| {
-        let concrete = any
-            .downcast_mut::<T>()
-            .expect("type-erased lookup matched T");
-        concrete
-            .bootstrap(ctx)
-            .map(|_| DispatchResult::Immediate(Vec::new()))
-            .map_err(|e| e.to_string())
-    }
-}
 
 /// Backend-only no-op materialize entry used by non-Backend roles.
 /// Roles other than `Backend` never reach the materialize entry

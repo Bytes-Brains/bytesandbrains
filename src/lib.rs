@@ -229,9 +229,10 @@ pub use bb_runtime::node::derivation::GenericSlotSpec;
 pub use bb_dsl::BuildError;
 
 // Node lifecycle.
+pub use bb_runtime::engine::BootstrapInput;
 pub use bb_runtime::engine::{EngineStats, EngineStep};
 pub use bb_runtime::ingress::{IngressEvent, IngressQueue, IngressQueueRef};
-pub use bb_runtime::node::{BootstrapTarget, Node, NodeConfig};
+pub use bb_runtime::node::{Node, NodeConfig};
 
 // Compile + install entry points.
 pub mod install;
@@ -247,7 +248,7 @@ pub use bb_dsl::contracts::{Aggregator, Backend, Codec, DataSource, Index, Model
 
 // Library-level syscall sugar.
 pub use bb_dsl::syscalls::{
-    address_book_insert_many, address_book_lookup, gate_dispatch, pass_through,
+    address_book_insert_many, address_book_lookup, announce, constant, gate_dispatch, pass_through,
 };
 
 // Value-type metadata.

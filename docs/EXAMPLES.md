@@ -1,9 +1,9 @@
 # Examples
 
-The `examples/` directory carries seven runnable examples that
+The `examples/` directory carries eight runnable examples that
 demonstrate the canonical authoring + execution pipeline.
 
-All seven follow the same shape: build the Module, compile the
+All eight follow the same shape: build the Module, compile the
 bound concretes, install, drive the poll loop.
 
 ```rust
@@ -20,9 +20,9 @@ let compiled = Compiler::new()
     .compile(model)?;                        // → one ModelProto
 let mut node = install(
     PeerId::from(1u64),
-    Address::empty(),
+    vec![Address::empty()],
     compiled,
-    "MyModule",
+    &["MyModule"],
     Config::new(),
 )?;
 
@@ -38,12 +38,25 @@ while let Poll::Ready(steps) = node.poll(&mut cx) {
 
 `Compiler::compile()` returns ONE `ModelProto` whose `functions[]`
 carries every partition (root + sub-Modules + backend subgraphs).
-`install(peer, addr, model, target, config)` picks the function
-whose name matches `target`, constructs each declared component
+`install(peer, addrs, model, targets, config)` picks each function
+whose name matches a `target`, constructs each declared component
 from the binding metadata, and brings the Node up. `Node::poll`
 returns `Poll::Ready(steps)` when the engine made progress and
 `Poll::Pending` when it drained to quiescence (the ingress
 waker registers with `cx`).
+
+## `quickstart`
+
+Smallest end-to-end shape: define two no-op Concretes, record a
+one-line `Module::body`, compile, install, drive `Node::poll` to
+quiescence. No bootstrap override, no wire boundary, no transport.
+
+```text
+cargo run --example quickstart --features test-components
+```
+
+Highlights: smallest viable Concretes, single-line `Module::body`,
+bare `Compiler::new().bind_data_source().bind_model().compile()`.
 
 ## `component_with_dependency`
 
@@ -83,49 +96,58 @@ HNSW data; Contract methods push `WorkItem`s to the worker over an
 cargo run --example custom_index_hnsw
 ```
 
-Highlights: async Contract dispatch, worker-thread pattern,
-`CompletionHandle` cross-thread shipping, k-NN search.
+Highlights: async Contract dispatch (`ContractResponse::Later`),
+worker-thread pattern, `CompletionHandle` cross-thread shipping,
+k-NN search.
 
 ## `federated_learning`
 
 Three-Module federated-learning topology (Client, ServerLogic,
 ServerReduce) that demonstrates aggregator + model + peer-selector
 composition end-to-end across multiple Nodes in the same process.
+Uses the canonical client-side bootstrap-as-function pattern
+(`Module::bootstrap` override seeding `address_book_insert_many`
++ `GlobalRegistryClient::announce`).
 
 ```text
-cargo run --example federated_learning
+cargo run --example federated_learning --features test-components
 ```
 
 Highlights: multi-component composition, per-Node install with
-different `target` names, end-to-end federated round flow.
+different `target` names, `Module::bootstrap` override, end-to-end
+federated round flow.
+
+## `single_node_federated_learning`
+
+Multi-role-single-Node federated learning: one Node hosts BOTH
+the client-side and server-side partitions via
+`install(&[client_target, server_target])`. The deduplicating install
+pass collapses the shared `model` and `aggregator` slots so both
+partitions dispatch through the same in-memory `ComponentRef`.
+
+```text
+cargo run --example single_node_federated_learning --features test-components
+```
+
+Highlights: multi-target install on a single Node, slot-binding
+dedup for shared in-memory state, `Node::invoke` to seed a
+composition-level input.
 
 ## `multi_target_network`
 
-Five-Module federated topology (`DataSource`, `Trainer`,
-`Aggregator`, `Coordinator`, `Predictor`) composed into a root
-`FedApp` Module. The example highlights every step from Module
-authoring through per-Node install. Each Node receives the SAME
-ModelProto and selects its role by `target`.
+Three-leaf federated topology (`LoaderLeaf`, `TrainerLeaf`,
+`SinkLeaf`) composed into a `FedNetwork` Module with a single
+`g.net_out` partition boundary. The example demonstrates
+multi-target install across two separate Nodes plus the
+in-process `Bus` pattern that forwards `EngineStep::SendEnvelope`
+between Nodes.
 
 ```text
 cargo run --example multi_target_network
 ```
 
-Highlights: composition, build, per-target install, in-process bus
-routing.
-
-## `named_ports_module`
-
-Demonstrates the `named ports` Module pattern: ports labeled by
-author-chosen names rather than positional. Useful for asymmetric
-multi-input / multi-output Modules whose inputs and outputs aren't
-naturally ordered.
-
-```text
-cargo run --example named_ports_module
-```
-
-Highlights: named ports, asymmetric Module wiring.
+Highlights: composition, build, per-target install across distinct
+peers, in-process bus routing.
 
 ## `polymorphic_types`
 

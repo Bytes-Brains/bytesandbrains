@@ -304,6 +304,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.slot("hnsw").is_some()
     );
 
+    println!("\n─── Bootstrap: arm install-order queue");
+    // Every Node must call `run_bootstrap` after `install` so the
+    // engine arms its install-order bootstrap queue. With no Module
+    // bootstrap overrides this drains immediately; the call is also
+    // a no-op gate against accidental body-phase polling before the
+    // engine has been kicked.
+    let bootstrap_steps = node.run_bootstrap(&[])?;
+    println!("  bootstrap drained {} step(s)", bootstrap_steps.len());
+
     println!("\n─── Drive: push query + poll");
     // Host pushes a query input via IngressEvent::Invoke; the
     // recorded Index.search op fires on the next poll cycle.

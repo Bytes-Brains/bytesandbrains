@@ -11,8 +11,7 @@ pub mod poll;
 pub mod step;
 
 pub use bootstrap::{
-    BootstrapKind, BootstrapRequest, BootstrapStatus, ComponentBootstrap, InFlightBootstrap,
-    ModuleBootstrap, OwnedBootstrapRequest, QueuedBootstrap, ReadyBootstrap,
+    BootstrapInput, BootstrapKind, BootstrapStatus, ModuleBootstrap, OwnedBootstrapInput,
 };
 pub use core::{Engine, EngineStats};
 pub use dispatch_entry::{OpDispatch, StatelessInvokeFn};

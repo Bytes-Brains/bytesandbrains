@@ -167,45 +167,6 @@ pub fn dispatcher_for(
         .map(|r| r.register_fn)
 }
 
-/// Per-concrete inventory carrying a per-T Bootstrap dispatcher-
-/// registration fn pointer. The `#[derive(bb::Concrete)]` macro
-/// emits one of these per registered concrete so the install path
-/// can register every concrete's `Bootstrap` dispatcher without the
-/// per-T downcast. Pairs with [`crate::engine::Engine::register_bootstrap_dispatcher`].
-///
-/// The derive's emitted impl falls back to the
-/// [`crate::contracts::bootstrap::Bootstrap`] trait default (no-op),
-/// so a Concrete with no manual `impl Bootstrap` still registers a
-/// dispatcher entry that drains the Component bootstrap phase
-/// cleanly. Authors override the default by hand-writing
-/// `impl Bootstrap for X` alongside the derive — the derive's
-/// `#[bb(bootstrap_override)]` attribute (parsed in
-/// `bb-derive::parse`) suppresses the default-impl emission so the
-/// two impls do not collide.
-pub struct BootstrapDispatcherRegistration {
-    /// `ConcreteComponent::TYPE_NAME` — the join key against
-    /// `ConcreteComponentRegistration`.
-    pub type_name: &'static str,
-    /// Per-T registration callback. The derive captures `T` at
-    /// the emit site and the fn body calls
-    /// `engine.register_bootstrap_dispatcher::<T>()`.
-    pub register_fn: fn(&mut crate::engine::Engine),
-}
-
-inventory::collect!(BootstrapDispatcherRegistration);
-
-/// Look up the Bootstrap dispatcher-registration fn for `type_name`.
-/// `install()` calls this for every registered concrete so the
-/// Component bootstrap fire path can dispatch through the right impl.
-/// Returns `None` when the concrete was registered without the
-/// `#[derive(bb::Concrete)]` Bootstrap-bridge emission.
-pub fn bootstrap_dispatcher_for(type_name: &str) -> Option<fn(&mut crate::engine::Engine)> {
-    inventory::iter::<BootstrapDispatcherRegistration>
-        .into_iter()
-        .find(|r| r.type_name == type_name)
-        .map(|r| r.register_fn)
-}
-
 /// Iterate every role binding for a given component type. Used by
 /// `Node::ensure_ready` to compute the bitflags + by introspection
 /// tools to discover what roles a struct implements.

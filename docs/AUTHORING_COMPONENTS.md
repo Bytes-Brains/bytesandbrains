@@ -302,16 +302,15 @@ let mut node = bytesandbrains::install(
     &["VectorStore"], Config::new(),
 )?;
 
-// Host-driven: install does not auto-fire. Drive the bootstrap
-// queue to quiescence before the body poll loop runs.
-let _ = node.run_bootstrap(BootstrapTarget::All)?;
+// Install does not auto-fire. Drive every install-order target
+// to quiescence before the body poll loop runs.
+let _ = node.run_bootstrap(&[])?;
 
 // Body-phase work after bootstrap drains.
 node.deliver_event("VectorStore", "query", &query_bytes)?;
 ```
 
-The per-component `is_op_locked` gate
-(`bb-runtime/src/engine/core.rs:1762-1806`) holds body-phase
+The per-component `is_op_locked` gate holds body-phase
 `add` / `search` ops behind the bootstrap call's touch set —
 the closure of every `ComponentRef` the bootstrap body reaches.
 Disjoint components keep firing during the bootstrap. The body
@@ -331,74 +330,15 @@ them inside `train(samples)`; an affine int8 quantizer
 computes `(scale, zero_point)` from the corpus and stores
 them on `self`.
 
-### Authoring a Component-level bootstrap
+### Components don't need a bootstrap method
 
-When the one-shot setup needs Rust code rather than recorded
-graph ops, override `bb::Bootstrap` alongside the primary
-Contract. Every `#[derive(bb::Concrete)]` type already
-participates in the Component bootstrap dispatch path via the
-trait's no-op default — override to allocate pools, mmap state,
-prime calibration caches, or dial seed peers.
-
-```rust
-use bytesandbrains::contracts::bootstrap::{Bootstrap, BootstrapCtx};
-
-#[derive(bb_derive::Concrete, bb_derive::Backend)]
-#[bootstrap_override]
-struct PinnedHostBackend {
-    pool: HostBufferPool,
-}
-
-impl Bootstrap for PinnedHostBackend {
-    type Error = AllocError;
-
-    fn bootstrap(&mut self, _ctx: &mut BootstrapCtx) -> Result<(), AllocError> {
-        // One-shot pinned-buffer pool allocation. Body-phase
-        // kernels read through `self.pool`.
-        self.pool.prime(/* config */)?;
-        Ok(())
-    }
-}
-```
-
-`#[bootstrap_override]` on the struct
-(`bb-derive/src/parse.rs:36-48`) suppresses the derive's default
-no-op impl so the hand-written one does not collide. The derive
-still emits the `BootstrapDispatcherRegistration` inventory
-entry, so `install()` wires the dispatcher
-(`src/install.rs:451-466`) without naming the type at the call
-site.
-
-The host fires the override explicitly through the slot the
-binding chain bound the concrete onto:
-
-```rust
-node.run_bootstrap(BootstrapTarget::Slots(&["compute"]))?;
-// or batch several slots in one call:
-node.run_bootstrap(BootstrapTarget::Slots(&["compute", "primary_index"]))?;
-```
-
-Prefer Component bootstrap over Module bootstrap when:
-
-- The setup is **Rust-side state** — buffer pools, file handles,
-  mmap regions, kernel caches — that no body op needs to *see*
-  as a graph value.
-- The setup is **per-instance** — one Component, one
-  initialization — rather than per-Module-target. The slot
-  granularity matches the resource lifetime exactly.
-- The setup needs the broader Rust runtime — system calls,
-  filesystem access, GPU context creation — and recording it
-  inside `Module::bootstrap` would force a placeholder syscall
-  that ultimately reaches Component code anyway.
-
-Prefer Module bootstrap when the setup must compose with the
-graph: an `Index::train(samples)` call needs a `DataSource` to
-produce the samples, and the recording in `Module::bootstrap`
-expresses that composition naturally. Module bootstrap also
-wins when the setup spans several Components — record one
-`Module::bootstrap` body that orchestrates them, rather than
-dispatching N Component bootstraps and re-implementing the
-composition outside the IR.
+Components do not implement a Component-level bootstrap trait.
+When a Component needs initialization, expose it as an op (like
+`GlobalRegistryClient::Announce` or `Index::train`) that the
+user's `Module::bootstrap` composes into their bootstrap graph.
+The Module decides ordering against sibling components — including
+inputs sourced from other Components — through ordinary DSL
+recording rather than a separate dispatch path.
 
 ### Sync-only Contracts
 
@@ -833,13 +773,11 @@ Mechanics:
 - Bootstrap functions queue in slice order. Install records
   every `module_phase = "bootstrap"` FunctionProto on
   `BootstrapState::install_order` without arming the queue; the
-  host calls `node.run_bootstrap(BootstrapTarget::All)` to drive
-  every queued bootstrap to quiescence in slice order — `Client`'s
-  bootstrap fires first, runs to quiescence, emits its
-  `EngineStep::BootstrapComplete`, then `Server`'s bootstrap
-  fires (`bb-runtime/src/engine/core.rs:1211-1239`,
-  `bb-runtime/src/engine/bootstrap.rs:256-296`). Single-target
-  installs are the length-1 case of the same path.
+  host calls `node.run_bootstrap(&[])` to drive every queued
+  bootstrap to quiescence in slice order — `Client`'s bootstrap
+  fires first, runs to quiescence, emits its
+  `EngineStep::BootstrapComplete`, then `Server`'s bootstrap fires.
+  Single-target installs are the length-1 case of the same path.
 - Each target registers as its own `Node::module_index` entry, so
   `deliver_event("Client", ...)` and `deliver_event("Server", ...)`
   route to different entry-point graphs. Top-level outputs surface

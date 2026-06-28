@@ -162,16 +162,12 @@ impl Engine {
         let mut ops_invoked: usize = 0;
         let mut budget_exceeded = false;
 
-        // Drive any host-supplied bootstrap requests staged between
-        // polls. The host kicks the install-order queue via
-        // `Node::run_bootstrap` (which seeds before this poll runs)
-        // and stages targets-with-inputs via `enqueue_bootstrap_request`;
-        // both paths land here so disjoint targets fire alongside the
-        // already-seeded phase and overlapping ones park on
-        // `bootstrap.waiting` until `maybe_complete_bootstrap`
-        // promotes them. Install no longer auto-seeds — the host
-        // owns when bootstrap starts.
-        self.drive_pending_bootstrap_requests();
+        // Host-driven bootstrap kicks land via `Node::run_bootstrap`
+        // before this poll runs (empty-slice install-order kick or
+        // per-target staging). Both paths arm `bootstrap.pending`
+        // and seed the body's OpRefs onto the frontier so the
+        // drain phases below pick them up. Install no longer
+        // auto-seeds — the host owns when bootstrap starts.
         let bootstrap_was_pending = self.bootstrap.pending;
         // Per-phase BootstrapComplete steps accumulate here as each
         // queued key drains. The final `WaitingOnBootstrap` /

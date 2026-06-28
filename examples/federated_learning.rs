@@ -77,16 +77,13 @@ use std::task::{Context, Waker};
 
 use bytesandbrains::aggregators::FedAvg;
 use bytesandbrains::backends::cpu::CpuBackend;
-use bytesandbrains::graph::{attr_tensor, kv};
 use bytesandbrains::placeholders::{AggregatorSlot, DataLoaderSlot, ModelSlot, PeerSelectorSlot};
-use bytesandbrains::proto::onnx::{tensor_proto, ModelProto, NodeProto, TensorProto};
-use bytesandbrains::protocols::{
-    GlobalRegistryClient, GlobalRegistryServer, GLOBAL_REGISTRY_DOMAIN,
-};
-use bytesandbrains::syscall_ids::{OP_CONSTANT, SYSCALL_DOMAIN};
-use bytesandbrains::types::{TYPE_ADDRESS_VEC, TYPE_PEER_ID, TYPE_TRIGGER};
+use bytesandbrains::proto::onnx::{tensor_proto, ModelProto};
+use bytesandbrains::protocols::{GlobalRegistryClient, GlobalRegistryServer};
+use bytesandbrains::types::{TYPE_ADDRESS_VEC, TYPE_PEER_ID};
 use bytesandbrains::{
-    install, Address, BootstrapTarget, Compiler, Config, Graph, Module, Output, PeerId,
+    address_book_insert_many, announce, constant, install, Address, Compiler, Config, Graph,
+    Module, PeerId,
 };
 
 use common::{StubLoader, StubModel};
@@ -98,11 +95,6 @@ use common::{StubLoader, StubModel};
 const SERVER_PEER: u64 = 100;
 /// Single client peer the example installs.
 const CLIENT_PEER: u64 = 101;
-
-/// Address-book op domain `register_op!` registers
-/// `AddressBook::InsertMany` under
-/// (see `bb-ops/src/syscalls/peers/insert_many.rs`).
-const ADDRESS_BOOK_DOMAIN: &str = "ai.bytesandbrains.address_book";
 
 // ─── Module compositions: framework generics only ──────────────────
 
@@ -164,75 +156,21 @@ impl Module for ClientLogic {
     /// ergonomic DSL helpers minting those carriers are tracked
     /// separately.
     fn bootstrap(&self, g: &mut Graph) {
-        let server_peer = record_constant(
+        let server_peer = constant(
             g,
             "server_peer_const",
-            tensor_proto::DataType::Int64,
             &TYPE_PEER_ID,
+            tensor_proto::DataType::Int64,
         );
-        let server_addrs = record_constant(
+        let server_addrs = constant(
             g,
             "server_addrs_const",
-            tensor_proto::DataType::Uint8,
             &TYPE_ADDRESS_VEC,
+            tensor_proto::DataType::Uint8,
         );
-
-        let insert_out_name = g.next_site_name();
-        g.push_node(NodeProto {
-            op_type: "InsertMany".into(),
-            domain: ADDRESS_BOOK_DOMAIN.into(),
-            input: vec![server_peer.name.clone(), server_addrs.name.clone()],
-            output: vec![insert_out_name.clone()],
-            metadata_props: vec![
-                kv("ai.bytesandbrains.input.peer", &server_peer.name),
-                kv("ai.bytesandbrains.input.addresses", &server_addrs.name),
-            ],
-            ..Default::default()
-        });
-        g.declare_value_info(&insert_out_name, &TYPE_TRIGGER);
-
-        let announce_out_name = g.next_site_name();
-        g.push_node(NodeProto {
-            op_type: "Announce".into(),
-            domain: GLOBAL_REGISTRY_DOMAIN.into(),
-            input: vec![server_peer.name.clone()],
-            output: vec![announce_out_name.clone()],
-            metadata_props: vec![kv("ai.bytesandbrains.input.server_peer", &server_peer.name)],
-            ..Default::default()
-        });
-        g.declare_value_info(&announce_out_name, &TYPE_TRIGGER);
+        let _ = address_book_insert_many(g, server_peer.clone(), server_addrs);
+        let _ = announce(g, server_peer);
     }
-}
-
-/// Record a `Constant` syscall NodeProto with a stub `TensorProto`
-/// payload sized for the declared output type. The compiler's
-/// `expand_constant` pass requires `value: TensorProto`; the example
-/// satisfies that contract with an empty tensor of the appropriate
-/// scalar kind. Outputs are typed `&'static TypeNode` so downstream
-/// nodes pick up the right denotation in `value_info`.
-fn record_constant(
-    g: &mut Graph,
-    label: &'static str,
-    data_type: tensor_proto::DataType,
-    output_type: &'static bytesandbrains::types::TypeNode,
-) -> Output {
-    let out_name = g.next_site_name();
-    let tensor = TensorProto {
-        data_type: data_type as i32,
-        dims: vec![1],
-        ..Default::default()
-    };
-    g.push_node(NodeProto {
-        op_type: OP_CONSTANT.into(),
-        domain: SYSCALL_DOMAIN.into(),
-        input: vec![],
-        output: vec![out_name.clone()],
-        attribute: vec![attr_tensor("value", tensor)],
-        metadata_props: vec![kv("ai.bytesandbrains.bootstrap.seed", label)],
-        ..Default::default()
-    });
-    g.declare_value_info(&out_name, output_type);
-    Output::new(out_name, output_type)
 }
 
 /// Server's per-round logic: sample K peers from the global view,
@@ -463,9 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // first poll.
     let mut total = 0usize;
     for node in [&mut client, &mut server_logic, &mut server_reduce] {
-        let boot_steps = node
-            .run_bootstrap(BootstrapTarget::All)
-            .expect("install-order kick");
+        let boot_steps = node.run_bootstrap(&[]).expect("install-order kick");
         total += boot_steps.len();
     }
     let waker = Waker::noop();

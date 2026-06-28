@@ -12,12 +12,8 @@ use syn::{DeriveInput, Ident};
 use crate::codegen_shared::{default_type_name, emit_universal_triple};
 
 /// `#[derive(bb::Concrete)]` codegen entry — emits the universal
-/// triple for `struct_ident`, parses `#[depends(...)]` entries into
-/// `ConcreteComponent::DEPENDENCIES`, and threads through the
-/// Bootstrap bridge (default `impl Bootstrap` unless
-/// `#[bootstrap_override]` is present + the
-/// `BootstrapDispatcherRegistration` inventory entry the install
-/// path uses to wire the engine's Component bootstrap dispatcher).
+/// triple for `struct_ident` and parses `#[depends(...)]` entries
+/// into `ConcreteComponent::DEPENDENCIES`.
 pub(crate) fn emit_concrete_derive(input: &DeriveInput) -> TokenStream {
     let struct_ident = &input.ident;
     let type_name = default_type_name(struct_ident);
@@ -26,55 +22,8 @@ pub(crate) fn emit_concrete_derive(input: &DeriveInput) -> TokenStream {
         Err(e) => return e.to_compile_error(),
     };
     let universal = emit_universal_triple(struct_ident, &type_name, &deps);
-    let bootstrap_override = crate::parse::has_bootstrap_override(&input.attrs);
-    let bootstrap_bridge = emit_bootstrap_bridge(struct_ident, &type_name, bootstrap_override);
     quote! {
         #universal
-        #bootstrap_bridge
-    }
-}
-
-/// Default `Bootstrap` impl + inventory registration emitted by
-/// `#[derive(bb::Concrete)]`. The impl uses the trait's no-op default
-/// so a Concrete with no manual override participates in the
-/// Component bootstrap dispatch path without boilerplate. The
-/// inventory entry captures `T` so `install()` can call
-/// `engine.register_bootstrap_dispatcher::<T>()` for every registered
-/// concrete. `#[bootstrap_override]` on the struct suppresses the
-/// impl emission so the author can hand-write
-/// `impl Bootstrap for X { ... }` without colliding with the derive.
-fn emit_bootstrap_bridge(
-    struct_ident: &syn::Ident,
-    type_name: &str,
-    bootstrap_override: bool,
-) -> TokenStream {
-    let default_impl = if bootstrap_override {
-        // User supplies their own `impl Bootstrap for #struct_ident`;
-        // the dispatcher routes through it via the same TypeId lookup.
-        TokenStream::new()
-    } else {
-        quote! {
-            impl ::bytesandbrains::contracts::bootstrap::Bootstrap for #struct_ident {
-                type Error = ::std::convert::Infallible;
-            }
-        }
-    };
-    quote! {
-        #default_impl
-
-        // Bootstrap dispatcher registration. The install path walks
-        // `inventory::iter::<BootstrapDispatcherRegistration>` and
-        // calls `register_fn(engine)` for each registered concrete,
-        // wiring `engine.register_bootstrap_dispatcher::<#struct_ident>()`
-        // before the first Component bootstrap fires.
-        ::bytesandbrains::inventory::submit! {
-            ::bytesandbrains::registry::BootstrapDispatcherRegistration {
-                type_name: #type_name,
-                register_fn: |engine: &mut ::bytesandbrains::engine::Engine| {
-                    engine.register_bootstrap_dispatcher::<#struct_ident>();
-                },
-            }
-        }
     }
 }
 

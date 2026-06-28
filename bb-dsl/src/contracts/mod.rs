@@ -17,10 +17,6 @@ pub mod backend {
 pub mod backend_default_walk {
     pub use bb_runtime::contracts::backend_default_walk::*;
 }
-/// Re-export of the `bb::Bootstrap` Contract trait for Component initialization.
-pub mod bootstrap {
-    pub use bb_runtime::contracts::bootstrap::*;
-}
 /// Re-export of the `bb::Codec` Contract trait for bidirectional storage-type codecs.
 pub mod codec {
     pub use bb_runtime::contracts::codec::*;

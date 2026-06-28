@@ -462,8 +462,9 @@ call. The same bootstrap-vs-barrier ordering options apply as
 with `Index::train`: record the call inside `Module::bootstrap`
 to gate body-phase `encode` / `decode` ops on training
 completion (the `is_op_locked` gate parks every body op touching
-the bound Codec — see [Part 11](#part-11--bbbootstrap)), or wire
-the trigger through a `bb.barrier`.
+the bound Codec — see
+[ENGINE.md §6.8](ENGINE.md#68-host-driven-bootstrap-entry)), or
+wire the trigger through a `bb.barrier`.
 
 **Implementing it.** Pair with `#[derive(bb::Codec)]`.
 
@@ -587,8 +588,8 @@ per sub-vector and keep them as the encoder. Authors gate body
 the call inside `Module::bootstrap` (the per-component
 `is_op_locked` gate parks `add` / `search` ops touching the
 bound Index until the bootstrap drains — see
-[Part 11](#part-11--bbbootstrap)) or by wiring the returned
-trigger into a `bb.barrier`.
+[ENGINE.md §6.8](ENGINE.md#68-host-driven-bootstrap-entry)) or by
+wiring the returned trigger into a `bb.barrier`.
 
 **Implementing it.** Pair with `#[derive(bb::Index)]`.
 
@@ -796,96 +797,6 @@ generic Protocol slot the compiler chain binds at compile time.
 
 See [WIRE.md](WIRE.md) for the wire envelope shape and a worked
 Gossip-protocol example.
-
-## Part 11 — `bb::Bootstrap`
-
-The optional Component initialization phase. Every Component
-(every `#[derive(bb::Concrete)]` type) participates implicitly —
-the derive emits a default no-op `impl Bootstrap`
-(`bb-derive/src/roles.rs:46-79`,
-`bb-runtime/src/contracts/bootstrap.rs:54-67`) so most concretes
-need zero boilerplate. Authors **override** when a Component
-needs to allocate resources, mmap state, prime a calibration
-buffer, or otherwise stage work before any of its other Contract
-methods runs.
-
-```rust
-pub trait Bootstrap {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn bootstrap(&mut self, _ctx: &mut BootstrapCtx)
-        -> Result<(), Self::Error>
-    {
-        Ok(())
-    }
-}
-```
-
-The host fires Component bootstraps explicitly via
-`Node::run_bootstrap(BootstrapTarget::Slots(&[slot, ...]))`
-(`bb-runtime/src/node/mod.rs`). The engine resolves
-`slot → ComponentRef`, allocates a fresh `ExecId`, locks the
-`{cref}` touch set on `bootstrap.in_flight`, and invokes the
-override through the per-T dispatcher registry the derive
-registered. Disjoint Component bootstraps fire concurrently —
-the `is_op_locked` gate parks only the touched components, so
-body ops on disjoint slots keep firing during a Component
-bootstrap.
-
-`DispatchResult::Immediate(_)` retires the in-flight entry
-synchronously. `DispatchResult::Async(cmd_id)` parks the body
-`ExecId` on `pending_async`; the impl's later
-`ctx.complete_command(cmd_id, ...)` drives the drain through
-the regular `handle_completion` path.
-
-### When a Concrete should override `Bootstrap`
-
-Override when:
-
-- **Backend pools.** The Backend allocates pinned host buffers,
-  GPU streams, or a kernel cache before body ops issue tensor
-  work.
-- **Index mmap / file-backed state.** The Index opens its
-  on-disk store, validates the header, and primes any in-memory
-  caches before `add` / `search` ops fire.
-- **Codec calibration.** A quantization codec pulls a calibration
-  sample from its bound `DataSource` and computes
-  `(scale, zero_point)` before `encode` / `decode` ops fire.
-- **Protocol kademlia bootstrap.** A protocol Component contacts
-  its seed peers to populate the routing table before the body
-  phase emits `FindNode` traffic.
-- **Async one-shot setup.** Any setup that returns
-  `ContractResponse::Later` so the engine can park the body
-  phase while the work completes off-thread.
-
-Skip the override when the Component is purely reactive — a
-stateless Aggregator, a `Backend` whose tensor pool lazy-allocates
-on first kernel call, a `DataSource` that loads from an in-memory
-buffer constructed at install. The default no-op runs through
-the dispatcher just like any other Contract method; the
-`is_op_locked` gate clears immediately so body ops fire as soon
-as the host kicks the queue.
-
-**DSL note.** A Component-level `Bootstrap` override is **not**
-the same as a `Module::bootstrap` recording. The former runs
-Rust code once when the host fires the slot (no DSL recording,
-no FunctionProto); the latter records a `__bootstrap`
-FunctionProto whose body ops dispatch as normal Contract methods.
-Modules that need *graph-expressed* one-shot setup (e.g.
-`Index::train(g, samples)`) record it inside `Module::bootstrap`;
-Components that need *Rust-expressed* one-shot setup (e.g. mmap
-a file) implement the `Bootstrap` Contract. The two paths
-coexist — a Module bootstrap that calls `Index::train` dispatches
-through the Index's Contract methods, which run only after the
-Index's `Bootstrap` override completes (the seed order is host-
-driven).
-
-See [ENGINE.md §6.8](ENGINE.md#68-host-driven-bootstrap-entry)
-for the engine plumbing,
-[CONTRACT_DISPATCH.md](CONTRACT_DISPATCH.md#bootstrap-is-just-another-contract-method)
-for the derive bridge,
-[AUTHORING_COMPONENTS.md](AUTHORING_COMPONENTS.md#authoring-a-component-level-bootstrap)
-for an authoring walkthrough.
 
 ## Cross-references
 
