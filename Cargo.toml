@@ -27,7 +27,7 @@ prost         = "0.13"
 prost-build   = "0.13"
 tracing       = "0.1"
 serde         = { version = "1", features = ["derive"] }
-bincode       = "1"
+bincode       = "3"
 ndarray       = { version = "0.16", features = ["serde"] }
 
 # ───────────────────────── Root crate ─────────────────────────
