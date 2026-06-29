@@ -63,7 +63,7 @@ unsigned-varint  = "0.8"
 tracing-subscriber    = { version = "0.3", optional = true, features = ["registry"] }
 tracing-opentelemetry = { version = "0.31", optional = true }
 opentelemetry         = { version = "0.30", optional = true }
-opentelemetry_sdk     = { version = "0.30", optional = true }
+opentelemetry_sdk     = { version = "0.32", optional = true }
 opentelemetry-otlp    = { version = "0.30", optional = true, features = ["grpc-tonic"] }
 
 [dev-dependencies]
